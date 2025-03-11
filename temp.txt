@@ -123,6 +123,161 @@ public class FileProcessingService {
                 .then(fileService.save(fileEntity));
     }
 
+    // Méthode modifiée pour le traitement des contrats qui évite les problèmes d'index
+    private Mono<Void> processErrorContracts(UUID folderId, String originalContent,
+                                             List<ErrorContract> errorContracts,
+                                             Sinks.Many<ProgressEvent> sink, AtomicInteger progress,
+                                             String contractParentTag) { // Ajout du paramètre manquant
+        log.info("Processing {} error contracts for folder: {}", errorContracts.size(), folderId);
+
+        // Approche: au lieu de supprimer chaque contrat individuellement dans le contenu précédent,
+        // reconstruire un nouveau document XML en excluant les contrats problématiques
+
+        return Mono.fromCallable(() -> {
+                    // Extraire les balises XML de base (en-tête et début/fin du document)
+                    String xmlHeader = "";
+                    String xmlStart = "";
+                    String xmlEnd = "";
+
+                    // Extraire l'en-tête XML et la structure du document
+                    int xmlDeclEnd = originalContent.indexOf("?>") + 2;
+                    if (xmlDeclEnd > 2) {
+                        xmlHeader = originalContent.substring(0, xmlDeclEnd);
+                    }
+
+                    // Trouver la balise racine
+                    int rootStart = originalContent.indexOf("<", xmlDeclEnd);
+                    int rootNameEnd = originalContent.indexOf(" ", rootStart);
+                    if (rootNameEnd == -1) rootNameEnd = originalContent.indexOf(">", rootStart);
+
+                    String rootTag = "";
+                    if (rootStart >= 0 && rootNameEnd > rootStart) {
+                        rootTag = originalContent.substring(rootStart + 1, rootNameEnd);
+
+                        // Trouver la fin de la balise d'ouverture
+                        int openTagEnd = originalContent.indexOf(">", rootStart) + 1;
+                        if (openTagEnd > 0) {
+                            xmlStart = originalContent.substring(0, openTagEnd);
+
+                            // Trouver la balise de fermeture
+                            String closeTag = "</" + rootTag + ">";
+                            int closeTagStart = originalContent.lastIndexOf(closeTag);
+                            if (closeTagStart > 0) {
+                                xmlEnd = originalContent.substring(closeTagStart);
+                            }
+                        }
+                    }
+
+                    log.info("XML structure extracted for folder {}: header={}, root tag={}",
+                            folderId, xmlHeader.length() > 0, rootTag);
+
+                    // Balises à rechercher
+                    String openTag = "<" + contractParentTag;
+                    String closeTag = "</" + contractParentTag + ">";
+
+                    // Créer un ensemble des positions de début des contrats à supprimer pour recherche rapide
+                    Set<Integer> contractsToRemovePositions = errorContracts.stream()
+                            .map(ErrorContract::getStartPosition)
+                            .collect(Collectors.toSet());
+
+                    // Analyser le contenu original et reconstruire sans les contrats problématiques
+                    StringBuilder newXmlContent = new StringBuilder();
+                    if (xmlStart.length() > 0) {
+                        newXmlContent.append(xmlStart);
+                    } else {
+                        // Fallback si on n'a pas pu extraire correctement la structure
+                        newXmlContent.append(xmlHeader);
+                        newXmlContent.append("<root>");
+                    }
+
+                    int searchPos = xmlStart.length() > 0 ? xmlStart.length() : (xmlHeader.length() + 7);
+                    int contractIndex = 0;
+                    int removedCount = 0;
+
+                    // Parcourir tous les contrats et ne garder que ceux qui ne sont pas à supprimer
+                    while (searchPos < originalContent.length() &&
+                            (xmlEnd.isEmpty() || searchPos < originalContent.length() - xmlEnd.length())) {
+                        int startTagPos = originalContent.indexOf(openTag, searchPos);
+                        if (startTagPos == -1 || (xmlEnd.length() > 0 && startTagPos >= originalContent.length() - xmlEnd.length()))
+                            break;
+
+                        int endTagPos = originalContent.indexOf(closeTag, startTagPos);
+                        if (endTagPos == -1) break;
+
+                        endTagPos += closeTag.length();
+
+                        // Vérifier si ce contrat doit être supprimé
+                        boolean shouldRemove = contractsToRemovePositions.contains(startTagPos);
+
+                        if (shouldRemove) {
+                            log.info("Removing contract at position {} (contract #{}) for folder {}",
+                                    startTagPos, contractIndex, folderId);
+                            removedCount++;
+
+                            // Ajouter le contenu entre le dernier contrat et celui-ci
+                            if (searchPos < startTagPos) {
+                                newXmlContent.append(originalContent, searchPos, startTagPos);
+                            }
+                        } else {
+                            // Ajouter le contenu entre le dernier contrat et celui-ci, puis le contrat lui-même
+                            newXmlContent.append(originalContent, searchPos, endTagPos);
+                        }
+
+                        searchPos = endTagPos;
+                        contractIndex++;
+
+                        // Mettre à jour la progression périodiquement
+                        if (contractIndex % 100 == 0) {
+                            int newProgress = 20 + (contractIndex * 70 / (errorContracts.size() + contractIndex));
+                            progress.set(newProgress);
+                            sink.tryEmitNext(new ProgressEvent(
+                                    folderId,
+                                    progress.get(),
+                                    "Traitement des contrats: " + contractIndex + " analysés, " +
+                                            removedCount + " supprimés",
+                                    FolderStatus.PROCESSING.name()
+                            ));
+                        }
+                    }
+
+                    // Ajouter le contenu restant après le dernier contrat
+                    if (xmlEnd.length() > 0) {
+                        newXmlContent.append(xmlEnd);
+                    } else {
+                        // S'il y a encore du contenu après le dernier contrat
+                        if (searchPos < originalContent.length()) {
+                            newXmlContent.append(originalContent.substring(searchPos));
+                        }
+                        newXmlContent.append("</root>");
+                    }
+
+                    // Sauvegarder la version finale
+                    String fileName = "V1_contracts.xml";
+                    Path targetPath = Paths.get(BASE_DIR + folderId + "/" + fileName);
+                    Files.createDirectories(targetPath.getParent());
+                    Files.writeString(targetPath, newXmlContent.toString());
+
+                    // Sauvegarder les informations des contrats supprimés
+                    for (int i = 0; i < errorContracts.size(); i++) {
+                        ErrorContract errorContract = errorContracts.get(i);
+                        saveRemovedContractId(folderId, errorContract.getReference(), errorContract.getCode(), 1);
+                    }
+
+                    // Créer l'entité fichier
+                    FileEntity versionedFile = new FileEntity(
+                            fileName,
+                            "versioning",
+                            1,
+                            folderId
+                    );
+
+                    return versionedFile;
+                })
+                .flatMap(fileService::save)
+                .then();
+    }
+
+    // Remplacer la partie du processXmlFiles qui traite les contrats par cette nouvelle approche
     private Mono<Void> processXmlFiles(UUID folderId, AtomicInteger progress,
                                        Sinks.Many<ProgressEvent> sink,
                                        String contractParentTag, String contractChildTag,
@@ -194,51 +349,14 @@ public class FileProcessingService {
                                                 saveUnprocessedReferences(folderId, missingRefs);
                                             }
 
-                                            // Traiter chaque version en se basant sur la version précédente
-                                            return Flux.range(0, errorContracts.size())
-                                                    .concatMap(i -> {
-                                                        ErrorContract errorContract = errorContracts.get(i);
-                                                        int versionNumber = i + 1;
-
-                                                        // Si c'est la première version, utiliser l'original, sinon lire la version précédente
-                                                        Mono<String> baseContentMono = (i == 0)
-                                                                ? Mono.just(originalContractsContent)
-                                                                : readVersionContent(folderId, i);
-
-                                                        return baseContentMono.flatMap(baseContent -> {
-                                                            log.info("Processing error contract {} of {}: '{}' at position {} for folder: {}",
-                                                                    i+1, errorContracts.size(), errorContract.getCode(),
-                                                                    errorContract.getPosition(), folderId);
-
-                                                            // Ajouter à la liste des références traitées
-                                                            processedErrorReferences.add(errorContract.getReference());
-
-                                                            // Supprimer le contrat problématique
-                                                            return removeSpecificContract(
-                                                                    folderId,
-                                                                    baseContent,
-                                                                    errorContract,
-                                                                    versionNumber
-                                                            ).doOnSuccess(newVersionFile -> {
-                                                                int newProgress = 20 + ((i + 1) * 70 / errorContracts.size());
-                                                                progress.set(newProgress);
-                                                                sink.tryEmitNext(new ProgressEvent(
-                                                                        folderId,
-                                                                        progress.get(),
-                                                                        "Contrat problématique traité " + (i + 1) + " sur " +
-                                                                                errorContracts.size() + ": " + errorContract.getCode(),
-                                                                        FolderStatus.PROCESSING.name()
-                                                                ));
-                                                            });
-                                                        });
-                                                    })
+                                            // Utiliser notre nouvelle approche pour traiter tous les contrats en une seule passe
+                                            return processErrorContracts(folderId, originalContractsContent, errorContracts, sink, progress, contractParentTag)
                                                     .then(finalizeFolderProcessing(folderId, sink, progress));
                                         });
                             });
                 })
                 .then();
     }
-
     // Méthode améliorée pour extraire les références d'erreur
     private List<String> extractErrorReferences(String xmlContent, String parentTag, String childTag) {
         List<String> references = new ArrayList<>();
@@ -968,7 +1086,7 @@ public class FileProcessingService {
             log.error("Failed to save removed contract information", e);
         }
     }
-   
+
     private Mono<FolderEntity> updateFolderStatus(UUID folderId, String status) {
         return folderService.findById(folderId)
                 .map(folder -> new FolderEntity(

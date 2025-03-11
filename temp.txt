@@ -1,19 +1,3 @@
-
-import javax.xml.parsers.DocumentBuilder;
-import javax.xml.parsers.DocumentBuilderFactory;
-import java.io.IOException;
-import java.io.StringReader;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.nio.file.StandardOpenOption;
-import java.time.Duration;
-import java.time.LocalDateTime;
-import java.util.*;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.stream.Collectors;
-
 @Service
 @RequiredArgsConstructor
 @Slf4j
@@ -27,6 +11,7 @@ public class FileProcessingService {
     private String BASE_DIR;
 
     private int totalErrors;
+    private List<String> processedErrorReferences = new ArrayList<>();
     public Mono<FolderDTO> createFolder(UploadRequest request) {
         FolderEntity folder = new FolderEntity(
                 request.name(),
@@ -159,10 +144,24 @@ public class FileProcessingService {
                                 String errorsContent = result.getT2();
                                 log.info("Read contracts and errors content for folder: {}", folderId);
 
-                                // Extract references from error XML
+                                // Extract references from error XML with improved logging
                                 List<String> errorReferences = extractErrorReferences(errorsContent, errorParentTag, errorChildTag);
+
+                                // Ajouter un log détaillé des références extraites
+                                log.info("Extracted error references: {}", errorReferences);
+
+                                // Vérifier les doublons
+                                Set<String> uniqueReferences = new HashSet<>(errorReferences);
+                                if (uniqueReferences.size() < errorReferences.size()) {
+                                    log.warn("Found {} duplicate references in error file",
+                                            errorReferences.size() - uniqueReferences.size());
+                                }
+
                                 int totalErrors = errorReferences.size();
                                 setTotalErrors(totalErrors);
+
+                                // Sauvegarder toutes les références d'erreur dans un fichier pour référence
+                                saveErrorReferencesToFile(folderId, errorReferences);
 
                                 log.info("Found {} error references to process for folder: {}", totalErrors, folderId);
 
@@ -176,14 +175,26 @@ public class FileProcessingService {
                                     return finalizeFolderProcessing(folderId, sink, progress);
                                 }
 
-                                // Trouver tous les contrats problématiques en une seule passe
-                                return findErrorContracts(originalContractsContent, errorReferences, contractParentTag, contractChildTag)
+                                // Trouver tous les contrats problématiques avec une méthode améliorée
+                                return findErrorContractsImproved(originalContractsContent, errorReferences, contractParentTag, contractChildTag)
                                         .flatMap(errorContracts -> {
                                             log.info("Found {} problematic contracts for folder: {}", errorContracts.size(), folderId);
 
-                                            // Traiter chaque version en se basant sur la version précédente
-                                            String currentXmlContent = originalContractsContent;
+                                            // Vérifier si toutes les références ont été traitées
+                                            Set<String> processedRefs = errorContracts.stream()
+                                                    .map(ErrorContract::getReference)
+                                                    .collect(Collectors.toSet());
 
+                                            Set<String> missingRefs = new HashSet<>(errorReferences);
+                                            missingRefs.removeAll(processedRefs);
+
+                                            if (!missingRefs.isEmpty()) {
+                                                log.warn("Some error references could not be matched to contracts: {}", missingRefs);
+                                                // Sauvegarder les références non traitées
+                                                saveUnprocessedReferences(folderId, missingRefs);
+                                            }
+
+                                            // Traiter chaque version en se basant sur la version précédente
                                             return Flux.range(0, errorContracts.size())
                                                     .concatMap(i -> {
                                                         ErrorContract errorContract = errorContracts.get(i);
@@ -198,6 +209,9 @@ public class FileProcessingService {
                                                             log.info("Processing error contract {} of {}: '{}' at position {} for folder: {}",
                                                                     i+1, errorContracts.size(), errorContract.getCode(),
                                                                     errorContract.getPosition(), folderId);
+
+                                                            // Ajouter à la liste des références traitées
+                                                            processedErrorReferences.add(errorContract.getReference());
 
                                                             // Supprimer le contrat problématique
                                                             return removeSpecificContract(
@@ -225,6 +239,68 @@ public class FileProcessingService {
                 .then();
     }
 
+    // Méthode améliorée pour extraire les références d'erreur
+    private List<String> extractErrorReferences(String xmlContent, String parentTag, String childTag) {
+        List<String> references = new ArrayList<>();
+        try {
+            DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+            // Désactiver la validation DTD pour éviter les problèmes de parsing
+            factory.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false);
+            factory.setFeature("http://xml.org/sax/features/namespaces", false);
+            factory.setFeature("http://xml.org/sax/features/validation", false);
+
+            DocumentBuilder builder = factory.newDocumentBuilder();
+
+            // Add root element if not present (for fragment processing)
+            if (!xmlContent.trim().startsWith("<?xml") && !xmlContent.trim().startsWith("<")) {
+                xmlContent = "<root>" + xmlContent + "</root>";
+            }
+
+            // Parse XML content
+            Document document = builder.parse(new org.xml.sax.InputSource(new StringReader(xmlContent)));
+
+            // Get all parent tag elements
+            NodeList parentElements = document.getElementsByTagName(parentTag);
+            log.info("Found {} {} elements in error file", parentElements.getLength(), parentTag);
+
+            // Extract reference values from child tags
+            for (int i = 0; i < parentElements.getLength(); i++) {
+                Element parentElement = (Element) parentElements.item(i);
+                NodeList childElements = parentElement.getElementsByTagName(childTag);
+
+                if (childElements.getLength() > 0) {
+                    String referenceValue = childElements.item(0).getTextContent().trim();
+                    if (!referenceValue.isEmpty()) {
+                        // Traitement amélioré pour extraire uniquement la position numérique
+                        String cleanedReference = referenceValue;
+                        // Pour supprimer "LIGNE 2;COLONNE " qui est présent sur les fichiers XML
+                        if (referenceValue.contains("LIGNE 2;COLONNE ")) {
+                            cleanedReference = referenceValue.replace("LIGNE 2;COLONNE ", "");
+                        } else if (referenceValue.contains("LIGNE") || referenceValue.contains("COLONNE")) {
+                            // Extraire seulement les chiffres si le format est différent
+                            cleanedReference = referenceValue.replaceAll("[^0-9]", "");
+                        }
+
+                        references.add(cleanedReference);
+                        log.info("Extracted reference: {} -> {}", referenceValue, cleanedReference);
+                    }
+                }
+            }
+
+            // Trier les références par ordre numérique pour un traitement plus cohérent
+            references.sort((a, b) -> {
+                try {
+                    return Integer.parseInt(a) - Integer.parseInt(b);
+                } catch (NumberFormatException e) {
+                    return a.compareTo(b);
+                }
+            });
+
+        } catch (Exception e) {
+            log.error("Error parsing XML for error references", e);
+        }
+        return references;
+    }
     // Classe pour stocker les informations des contrats problématiques
     private static class ErrorContract {
         private final String reference;
@@ -382,44 +458,320 @@ public class FileProcessingService {
         });
     }
 
-    private List<String> extractErrorReferences(String xmlContent, String parentTag, String childTag) {
-        List<String> references = new ArrayList<>();
-        try {
-            DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
-            DocumentBuilder builder = factory.newDocumentBuilder();
+    // Nouvelle méthode pour trouver les contrats problématiques de manière plus robuste
+    private Mono<List<ErrorContract>> findErrorContractsImproved(String xmlContent, List<String> errorReferences,
+                                                                 String contractParentTag, String contractChildTag) {
+        return Mono.fromCallable(() -> {
+            List<ErrorContract> errorContracts = new ArrayList<>();
+            Map<String, Boolean> referencesProcessed = new HashMap<>();
 
-            // Add root element if not present (for fragment processing)
-            if (!xmlContent.trim().startsWith("<?xml") && !xmlContent.trim().startsWith("<")) {
-                xmlContent = "<root>" + xmlContent + "</root>";
+            // Initialiser toutes les références comme non traitées
+            for (String ref : errorReferences) {
+                referencesProcessed.put(ref, false);
             }
 
-            // Parse XML content
-            Document document = builder.parse(new org.xml.sax.InputSource(new StringReader(xmlContent)));
+            try {
+                // Balises à rechercher
+                String openTag = "<" + contractParentTag;
+                String closeTag = "</" + contractParentTag + ">";
+                String codeOpenTag = "<" + contractChildTag + ">";
+                String codeCloseTag = "</" + contractChildTag + ">";
 
-            // Get all parent tag elements
-            NodeList parentElements = document.getElementsByTagName(parentTag);
-            log.info("Found {} {} elements in error file", parentElements.getLength(), parentTag);
+                // Trouver toutes les balises contractParentTag dans le document
+                List<Triple<Integer, Integer, String>> contracts = new ArrayList<>();
+                int searchPos = 0;
 
-            // Extract reference values from child tags
-            for (int i = 0; i < parentElements.getLength(); i++) {
-                Element parentElement = (Element) parentElements.item(i);
-                NodeList childElements = parentElement.getElementsByTagName(childTag);
+                while (searchPos < xmlContent.length()) {
+                    int startTagPos = xmlContent.indexOf(openTag, searchPos);
+                    if (startTagPos == -1) break;
 
-                if (childElements.getLength() > 0) {
-                    String referenceValue = childElements.item(0).getTextContent().trim();
-                    if (!referenceValue.isEmpty()) {
-                        // Pour supprimer "LIGNE 2;COLONNE " qui est présent sur les fichiers xml en se basant sur le format actuel de la BCEA0
-                        references.add(referenceValue.replace("LIGNE 2;COLONNE ",""));
-                        log.info("Extracted reference: {}", referenceValue);
+                    int endTagPos = xmlContent.indexOf(closeTag, startTagPos);
+                    if (endTagPos == -1) break;
+
+                    endTagPos += closeTag.length();
+                    String contractContent = xmlContent.substring(startTagPos, endTagPos);
+
+                    // Extraire le code du contrat
+                    String contractCode = null;
+                    int codeStart = contractContent.indexOf(codeOpenTag);
+                    if (codeStart != -1) {
+                        int codeValueStart = codeStart + codeOpenTag.length();
+                        int codeValueEnd = contractContent.indexOf(codeCloseTag, codeValueStart);
+                        if (codeValueEnd != -1) {
+                            contractCode = contractContent.substring(codeValueStart, codeValueEnd);
+                        }
+                    }
+
+                    contracts.add(Triple.of(startTagPos, endTagPos, contractCode));
+                    searchPos = endTagPos;
+                }
+
+                // Pour chaque référence d'erreur, trouver le contrat correspondant
+                for (String reference : errorReferences) {
+                    try {
+                        int position = Integer.parseInt(reference);
+                        boolean foundContract = false;
+
+                        // D'abord chercher si la position est directement dans un contrat
+                        for (Triple<Integer, Integer, String> contract : contracts) {
+                            int start = contract.getLeft();
+                            int end = contract.getMiddle();
+                            String code = contract.getRight();
+
+                            if (position >= start && position < end) {
+                                errorContracts.add(new ErrorContract(reference, code, start, end));
+                                referencesProcessed.put(reference, true);
+                                foundContract = true;
+                                break;
+                            }
+                        }
+
+                        // Si on n'a pas trouvé, chercher le contrat le plus proche après cette position
+                        if (!foundContract) {
+                            Triple<Integer, Integer, String> closestContract = null;
+                            int minDistance = Integer.MAX_VALUE;
+
+                            for (Triple<Integer, Integer, String> contract : contracts) {
+                                int start = contract.getLeft();
+
+                                if (start > position && (start - position) < minDistance) {
+                                    minDistance = start - position;
+                                    closestContract = contract;
+                                }
+                            }
+
+                            if (closestContract != null) {
+                                errorContracts.add(new ErrorContract(
+                                        reference,
+                                        closestContract.getRight(),
+                                        closestContract.getLeft(),
+                                        closestContract.getMiddle()
+                                ));
+                                referencesProcessed.put(reference, true);
+                            } else {
+                                log.warn("No appropriate contract found for reference {}", reference);
+                            }
+                        }
+                    } catch (NumberFormatException e) {
+                        log.warn("Invalid position reference: {}", reference);
                     }
                 }
+
+                // Vérifier les références non traitées
+                for (Map.Entry<String, Boolean> entry : referencesProcessed.entrySet()) {
+                    if (!entry.getValue()) {
+                        log.warn("Reference not processed: {}", entry.getKey());
+                    }
+                }
+
+                // Trier les contrats d'erreur par position pour un traitement cohérent
+                errorContracts.sort(Comparator.comparingInt(ErrorContract::getStartPosition));
+
+                log.info("Found {} error contracts from {} error references",
+                        errorContracts.size(), errorReferences.size());
+
+                return errorContracts;
+
+            } catch (Exception e) {
+                log.error("Error finding problematic contracts", e);
+                throw new RuntimeException("Error finding problematic contracts: " + e.getMessage(), e);
             }
-        } catch (Exception e) {
-            log.error("Error parsing XML for error references", e);
+        }).subscribeOn(Schedulers.boundedElastic());
+    }
+    // Méthode pour sauvegarder toutes les références d'erreur dans un fichier
+    private void saveErrorReferencesToFile(UUID folderId, List<String> errorReferences) {
+        try {
+            Path filePath = Paths.get(BASE_DIR + folderId + "/all_error_references.txt");
+            Files.createDirectories(filePath.getParent());
+
+            List<String> lines = new ArrayList<>();
+            lines.add("Total error references found: " + errorReferences.size());
+            lines.add("References (sorted):");
+            for (int i = 0; i < errorReferences.size(); i++) {
+                lines.add((i+1) + ". " + errorReferences.get(i));
+            }
+
+            Files.write(filePath, lines);
+            log.info("Saved all {} error references to file for folder {}", errorReferences.size(), folderId);
+        } catch (IOException e) {
+            log.error("Failed to save error references to file", e);
         }
-        return references;
     }
 
+    // Méthode pour sauvegarder les références qui n'ont pas pu être traitées
+    private void saveUnprocessedReferences(UUID folderId, Set<String> missingRefs) {
+        try {
+            Path filePath = Paths.get(BASE_DIR + folderId + "/unprocessed_references.txt");
+            Files.createDirectories(filePath.getParent());
+
+            List<String> lines = new ArrayList<>();
+            lines.add("Total unprocessed references: " + missingRefs.size());
+            lines.add("Unprocessed references:");
+
+            int i = 1;
+            for (String ref : missingRefs) {
+                lines.add(i + ". " + ref);
+                i++;
+            }
+
+            Files.write(filePath, lines);
+            log.info("Saved {} unprocessed references to file for folder {}", missingRefs.size(), folderId);
+        } catch (IOException e) {
+            log.error("Failed to save unprocessed references to file", e);
+        }
+    }
+
+    private Mono<Void> finalizeFolderProcessing(UUID folderId, Sinks.Many<ProgressEvent> sink, AtomicInteger progress) {
+        log.info("Starting finalizeFolderProcessing for folder: {}", folderId);
+
+        return Mono.fromCallable(() -> {
+                    // Créer un rapport détaillé incluant toutes les informations sur le traitement
+                    createDetailedReport(folderId);
+
+                    // Create a file entity for removed_contracts.txt
+                    Path filePath = Paths.get(BASE_DIR + folderId + "/removed_contracts.txt");
+                    log.info("Checking for removed_contracts.txt at path: {}", filePath);
+
+                    FileEntity resultFile = null;
+                    if (Files.exists(filePath)) {
+                        log.info("Found existing removed_contracts.txt for folder {}", folderId);
+                        resultFile = new FileEntity(
+                                "removed_contracts.txt",
+                                "result",
+                                0,
+                                folderId
+                        );
+                    } else {
+                        log.info("Creating new removed_contracts.txt for folder {}", folderId);
+                        // Create an empty result file if it doesn't exist
+                        Files.createDirectories(filePath.getParent());
+                        Files.writeString(filePath, "No contracts were removed");
+
+                        resultFile = new FileEntity(
+                                "removed_contracts.txt",
+                                "result",
+                                0,
+                                folderId
+                        );
+                    }
+
+                    // Créer aussi une entité pour le rapport détaillé
+                    FileEntity reportFile = new FileEntity(
+                            "processing_report.txt",
+                            "report",
+                            0,
+                            folderId
+                    );
+
+                    log.info("Created FileEntity for removed_contracts.txt: {}", resultFile);
+                    return Tuples.of(resultFile, reportFile);
+                })
+                .flatMap(tuple -> {
+                    FileEntity resultFile = tuple.getT1();
+                    FileEntity reportFile = tuple.getT2();
+
+                    log.info("Saving FileEntity for removed_contracts.txt in folder: {}", folderId);
+                    return fileService.save(resultFile)
+                            .then(fileService.save(reportFile))
+                            .doOnSuccess(saved -> log.info("Successfully saved result files"))
+                            .doOnError(err -> log.error("Error saving result files: {}", err.getMessage()));
+                })
+                .flatMap(savedFile -> {
+                    log.info("Result files saved, now updating folder status to COMPLETED for folder: {}", folderId);
+                    return folderService.findById(folderId)
+                            .doOnSuccess(folder -> {
+                                if (folder != null) {
+                                    log.info("Found folder with ID: {}", folder.id());
+                                } else {
+                                    log.warn("Folder not found with ID: {}", folderId);
+                                }
+                            })
+                            .flatMap(folder -> {
+                                FolderEntity folderToSave = new FolderEntity(
+                                        folder.id(),
+                                        folder.name(),
+                                        folder.bceaoStatus(),
+                                        folder.period(),
+                                        getTotalErrors(), // Mettre à jour le nombre d'erreurs
+                                        FolderStatus.COMPLETED.name(),
+                                        folder.createdAt(),
+                                        LocalDateTime.now()
+                                );
+                                log.info("About to save updated folder: {} with status COMPLETED", folder.id());
+                                return folderService.save(folderToSave)
+                                        .doOnSuccess(saved -> log.info("Successfully updated folder status to COMPLETED for folder: {}", saved.id()))
+                                        .doOnError(err -> log.error("Error updating folder status: {}", err.getMessage()));
+                            });
+                })
+                .doOnSuccess(folder -> {
+                    log.info("Folder processing completed successfully for folder: {}", folderId);
+                    // Emit final progress event
+                    progress.set(100);
+                    try {
+                        sink.tryEmitNext(new ProgressEvent(
+                                folderId,
+                                100,
+                                "Traitement terminé avec succès (" + getTotalErrors() + " erreurs traitées)",
+                                FolderStatus.COMPLETED.name()
+                        ));
+                        log.info("Emitted final progress event for folder: {}", folderId);
+                        sink.tryEmitComplete();
+                        log.info("Completed progress sink for folder: {}", folderId);
+                    } catch (Exception e) {
+                        log.error("Error emitting final progress event: {}", e.getMessage());
+                    }
+                })
+                .doOnError(error -> {
+                    log.error("Error during finalization for folder {}: {}", folderId, error.getMessage(), error);
+                    try {
+                        sink.tryEmitNext(new ProgressEvent(
+                                folderId,
+                                progress.get(),
+                                "Error finalizing: " + error.getMessage(),
+                                FolderStatus.ERROR.name()
+                        ));
+                        sink.tryEmitComplete();
+                    } catch (Exception e) {
+                        log.error("Error emitting error progress event: {}", e.getMessage());
+                    }
+                })
+                .then()
+                .doOnTerminate(() -> {
+                    log.info("Finalization process terminated for folder: {}", folderId);
+                    // Réinitialiser les références traitées pour le prochain traitement
+                    processedErrorReferences.clear();
+                });
+    }
+
+    // Méthode pour créer un rapport détaillé du traitement
+    private void createDetailedReport(UUID folderId) {
+        try {
+            Path filePath = Paths.get(BASE_DIR + folderId + "/processing_report.txt");
+            Files.createDirectories(filePath.getParent());
+
+            List<String> lines = new ArrayList<>();
+            lines.add("=== RAPPORT DE TRAITEMENT ===");
+            lines.add("Dossier ID: " + folderId);
+            lines.add("Date de traitement: " + LocalDateTime.now());
+            lines.add("Nombre total d'erreurs: " + getTotalErrors());
+            lines.add("Nombre de références traitées: " + processedErrorReferences.size());
+
+            if (processedErrorReferences.size() < getTotalErrors()) {
+                lines.add("ATTENTION: " + (getTotalErrors() - processedErrorReferences.size()) +
+                        " références n'ont pas été traitées.");
+            }
+
+            lines.add("\n=== LISTE DES RÉFÉRENCES TRAITÉES ===");
+            for (int i = 0; i < processedErrorReferences.size(); i++) {
+                lines.add((i+1) + ". " + processedErrorReferences.get(i));
+            }
+
+            Files.write(filePath, lines);
+            log.info("Created detailed processing report for folder {}", folderId);
+        } catch (IOException e) {
+            log.error("Failed to create detailed processing report", e);
+        }
+    }
     // Méthode modifiée pour accepter une liste de références à supprimer
     private Mono<FileEntity> generateNewContractVersion(UUID folderId, String contractsContent,
                                                         List<String> references, int version,
@@ -616,109 +968,7 @@ public class FileProcessingService {
             log.error("Failed to save removed contract information", e);
         }
     }
-    private Mono<Void> finalizeFolderProcessing(UUID folderId, Sinks.Many<ProgressEvent> sink, AtomicInteger progress) {
-        log.info("Starting finalizeFolderProcessing for folder: {}", folderId);
-
-        return Mono.fromCallable(() -> {
-                    // Create a file entity for removed_contracts.txt
-                    Path filePath = Paths.get(BASE_DIR + folderId + "/removed_contracts.txt");
-                    log.info("Checking for removed_contracts.txt at path: {}", filePath);
-
-                    FileEntity resultFile = null;
-                    if (Files.exists(filePath)) {
-                        log.info("Found existing removed_contracts.txt for folder {}", folderId);
-                        resultFile = new FileEntity(
-                                "removed_contracts.txt",
-                                "result",
-                                0, // No version number for result file
-                                folderId
-                        );
-                    } else {
-                        log.info("Creating new removed_contracts.txt for folder {}", folderId);
-                        // Create an empty result file if it doesn't exist
-                        Files.createDirectories(filePath.getParent());
-                        Files.writeString(filePath, "No contracts were removed");
-
-                        resultFile = new FileEntity(
-                                "removed_contracts.txt",
-                                "result",
-                                0,
-                                folderId
-                        );
-                    }
-
-                    log.info("Created FileEntity for removed_contracts.txt: {}", resultFile);
-                    return resultFile;
-                })
-                .flatMap(resultFile -> {
-                    log.info("Saving FileEntity for removed_contracts.txt in folder: {}", folderId);
-                    return fileService.save(resultFile)
-                            .doOnSuccess(saved -> log.info("Successfully saved result file with ID: {}", saved.id()))
-                            .doOnError(err -> log.error("Error saving result file: {}", err.getMessage()));
-                })
-                .flatMap(savedFile -> {
-                    log.info("Result file saved, now updating folder status to COMPLETED for folder: {}", folderId);
-                    return folderService.findById(folderId)
-                            .doOnSuccess(folder -> {
-                                if (folder != null) {
-                                    log.info("Found folder with ID: {}", folder.id());
-                                } else {
-                                    log.warn("Folder not found with ID: {}", folderId);
-                                }
-                            })
-                            .flatMap(folder -> {
-                                FolderEntity folderToSave = new FolderEntity(
-                                        folder.id(),
-                                        folder.name(),
-                                        folder.bceaoStatus(),
-                                        folder.period(),
-                                        folder.error(),
-                                        FolderStatus.COMPLETED.name(),
-                                        folder.createdAt(),
-                                        LocalDateTime.now()
-                                );
-                                log.info("About to save updated folder: {} with status COMPLETED", folder.id());
-                                return folderService.save(folderToSave)
-                                        .doOnSuccess(saved -> log.info("Successfully updated folder status to COMPLETED for folder: {}", saved.id()))
-                                        .doOnError(err -> log.error("Error updating folder status: {}", err.getMessage()));
-                            });
-                })
-                .doOnSuccess(folder -> {
-                    log.info("Folder processing completed successfully for folder: {}", folderId);
-                    // Emit final progress event
-                    progress.set(100);
-                    try {
-                        sink.tryEmitNext(new ProgressEvent(
-                                folderId,
-                                100,
-                                "Traitement terminé avec succès",
-                                FolderStatus.COMPLETED.name()
-                        ));
-                        log.info("Emitted final progress event for folder: {}", folderId);
-                        sink.tryEmitComplete();
-                        log.info("Completed progress sink for folder: {}", folderId);
-                    } catch (Exception e) {
-                        log.error("Error emitting final progress event: {}", e.getMessage());
-                    }
-                })
-                .doOnError(error -> {
-                    log.error("Error during finalization for folder {}: {}", folderId, error.getMessage(), error);
-                    try {
-                        sink.tryEmitNext(new ProgressEvent(
-                                folderId,
-                                progress.get(),
-                                "Error finalizing: " + error.getMessage(),
-                                FolderStatus.ERROR.name()
-                        ));
-                        sink.tryEmitComplete();
-                    } catch (Exception e) {
-                        log.error("Error emitting error progress event: {}", e.getMessage());
-                    }
-                })
-                .then()
-                .doOnTerminate(() -> log.info("Finalization process terminated for folder: {}", folderId));
-    }
-
+   
     private Mono<FolderEntity> updateFolderStatus(UUID folderId, String status) {
         return folderService.findById(folderId)
                 .map(folder -> new FolderEntity(

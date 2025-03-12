@@ -11,7 +11,7 @@ public class FileProcessingService {
     private String BASE_DIR;
 
     private int totalErrors;
-    private List<String> processedErrorReferences = new ArrayList<>();
+    private  List<String> processedErrorReferences = new ArrayList<>();
     public Mono<FolderDTO> createFolder(UploadRequest request) {
         FolderEntity folder = new FolderEntity(
                 request.name(),
@@ -127,11 +127,8 @@ public class FileProcessingService {
     private Mono<Void> processErrorContracts(UUID folderId, String originalContent,
                                              List<ErrorContract> errorContracts,
                                              Sinks.Many<ProgressEvent> sink, AtomicInteger progress,
-                                             String contractParentTag) { // Ajout du paramètre manquant
+                                             String contractParentTag) {
         log.info("Processing {} error contracts for folder: {}", errorContracts.size(), folderId);
-
-        // Approche: au lieu de supprimer chaque contrat individuellement dans le contenu précédent,
-        // reconstruire un nouveau document XML en excluant les contrats problématiques
 
         return Mono.fromCallable(() -> {
                     // Extraire les balises XML de base (en-tête et début/fin du document)
@@ -174,10 +171,14 @@ public class FileProcessingService {
                     // Balises à rechercher
                     String openTag = "<" + contractParentTag;
                     String closeTag = "</" + contractParentTag + ">";
+                    // Balise pour le code du contrat
+                    String codeTag = contractParentTag.replaceAll("s$", "") + "Code"; // Exemple: "contrats" -> "contratCode"
+                    String codeOpenTag = "<" + codeTag + ">";
+                    String codeCloseTag = "</" + codeTag + ">";
 
-                    // Créer un ensemble des positions de début des contrats à supprimer pour recherche rapide
-                    Set<Integer> contractsToRemovePositions = errorContracts.stream()
-                            .map(ErrorContract::getStartPosition)
+                    // Créer un ensemble des codes de contrats à supprimer pour recherche rapide
+                    Set<String> contractCodesToRemove = errorContracts.stream()
+                            .map(ErrorContract::getCode)
                             .collect(Collectors.toSet());
 
                     // Analyser le contenu original et reconstruire sans les contrats problématiques
@@ -205,13 +206,25 @@ public class FileProcessingService {
                         if (endTagPos == -1) break;
 
                         endTagPos += closeTag.length();
+                        String contractContent = originalContent.substring(startTagPos, endTagPos);
 
-                        // Vérifier si ce contrat doit être supprimé
-                        boolean shouldRemove = contractsToRemovePositions.contains(startTagPos);
+                        // Extraire le code du contrat
+                        String contractCode = null;
+                        int codeStart = contractContent.indexOf(codeOpenTag);
+                        if (codeStart != -1) {
+                            int codeValueStart = codeStart + codeOpenTag.length();
+                            int codeValueEnd = contractContent.indexOf(codeCloseTag, codeValueStart);
+                            if (codeValueEnd != -1) {
+                                contractCode = contractContent.substring(codeValueStart, codeValueEnd);
+                            }
+                        }
+
+                        // Vérifier si ce contrat doit être supprimé en se basant sur le code
+                        boolean shouldRemove = contractCode != null && contractCodesToRemove.contains(contractCode);
 
                         if (shouldRemove) {
-                            log.info("Removing contract at position {} (contract #{}) for folder {}",
-                                    startTagPos, contractIndex, folderId);
+                            log.info("Removing contract with code {} (contract #{}) for folder {}",
+                                    contractCode, contractIndex, folderId);
                             removedCount++;
 
                             // Ajouter le contenu entre le dernier contrat et celui-ci
@@ -330,7 +343,7 @@ public class FileProcessingService {
                                     return finalizeFolderProcessing(folderId, sink, progress);
                                 }
 
-                                // Trouver tous les contrats problématiques avec une méthode améliorée
+                                // Trouver tous les contrats problématiques avec une méthode
                                 return findErrorContractsImproved(originalContractsContent, errorReferences, contractParentTag, contractChildTag)
                                         .flatMap(errorContracts -> {
                                             log.info("Found {} problematic contracts for folder: {}", errorContracts.size(), folderId);
@@ -423,14 +436,10 @@ public class FileProcessingService {
     private static class ErrorContract {
         private final String reference;
         private final String code;
-        private final int startPosition;
-        private final int endPosition;
 
-        public ErrorContract(String reference, String code, int startPosition, int endPosition) {
+        public ErrorContract(String reference, String code) {
             this.reference = reference;
             this.code = code;
-            this.startPosition = startPosition;
-            this.endPosition = endPosition;
         }
 
         public String getReference() {
@@ -440,130 +449,6 @@ public class FileProcessingService {
         public String getCode() {
             return code;
         }
-
-        public int getPosition() {
-            return startPosition;
-        }
-
-        public int getStartPosition() {
-            return startPosition;
-        }
-
-        public int getEndPosition() {
-            return endPosition;
-        }
-    }
-
-    // Méthode pour trouver tous les contrats problématiques en une seule passe
-    private Mono<List<ErrorContract>> findErrorContracts(String xmlContent, List<String> errorReferences,
-                                                         String contractParentTag, String contractChildTag) {
-        return Mono.fromCallable(() -> {
-            List<ErrorContract> errorContracts = new ArrayList<>();
-
-            try {
-                // Balises à rechercher
-                String openTag = "<" + contractParentTag;
-                String closeTag = "</" + contractParentTag + ">";
-                String codeOpenTag = "<" + contractChildTag + ">";
-                String codeCloseTag = "</" + contractChildTag + ">";
-
-                // Trouver toutes les balises contractParentTag dans le document
-                int searchPos = 0;
-                int contractIndex = 0;
-
-                while (searchPos < xmlContent.length()) {
-                    int startTagPos = xmlContent.indexOf(openTag, searchPos);
-                    if (startTagPos == -1) break;
-
-                    int endTagPos = xmlContent.indexOf(closeTag, startTagPos);
-                    if (endTagPos == -1) break;
-
-                    endTagPos += closeTag.length();
-                    String contractContent = xmlContent.substring(startTagPos, endTagPos);
-
-                    // Extraire le code du contrat
-                    String contractCode = null;
-                    int codeStart = contractContent.indexOf(codeOpenTag);
-                    if (codeStart != -1) {
-                        int codeValueStart = codeStart + codeOpenTag.length();
-                        int codeValueEnd = contractContent.indexOf(codeCloseTag, codeValueStart);
-                        if (codeValueEnd != -1) {
-                            contractCode = contractContent.substring(codeValueStart, codeValueEnd);
-                        }
-                    }
-
-                    // Vérifier si ce contrat correspond à une référence d'erreur
-                    for (String reference : errorReferences) {
-                        try {
-                            int position = Integer.parseInt(reference);
-
-                            // Si la position est dans ce contrat ou si c'est le contrat juste après la position
-                            if ((position >= startTagPos && position < endTagPos) ||
-                                    (contractIndex > 0 && position >= searchPos && position < startTagPos)) {
-                                errorContracts.add(new ErrorContract(reference, contractCode, startTagPos, endTagPos));
-                                break;
-                            }
-                        } catch (NumberFormatException e) {
-                            log.warn("Invalid position reference: {}", reference);
-                        }
-                    }
-
-                    searchPos = endTagPos;
-                    contractIndex++;
-                }
-
-                log.info("Found {} error contracts from {} error references", errorContracts.size(), errorReferences.size());
-                return errorContracts;
-
-            } catch (Exception e) {
-                log.error("Error finding problematic contracts", e);
-                throw new RuntimeException("Error finding problematic contracts: " + e.getMessage(), e);
-            }
-        }).subscribeOn(Schedulers.boundedElastic());
-    }
-
-    // Méthode pour supprimer un contrat spécifique
-    private Mono<FileEntity> removeSpecificContract(UUID folderId, String xmlContent,
-                                                    ErrorContract errorContract, int version) {
-        return Mono.fromCallable(() -> {
-            try {
-                // Supprimer le contrat spécifique
-                String updatedContent = xmlContent.substring(0, errorContract.getStartPosition()) +
-                        xmlContent.substring(errorContract.getEndPosition());
-
-                // Sauvegarder la nouvelle version
-                String fileName = "V" + version + "_contracts.xml";
-                Path targetPath = Paths.get(BASE_DIR + folderId + "/" + fileName);
-                Files.createDirectories(targetPath.getParent());
-                Files.writeString(targetPath, updatedContent);
-
-                // Sauvegarder l'information du contrat supprimé
-                saveRemovedContractId(folderId, errorContract.getReference(), errorContract.getCode(), version);
-
-                // Créer l'entité fichier
-                FileEntity versionedFile = new FileEntity(
-                        fileName,
-                        "versioning",
-                        version,
-                        folderId
-                );
-
-                return versionedFile;
-            } catch (Exception e) {
-                log.error("Error generating version file", e);
-                throw new RuntimeException("Error generating version file: " + e.getMessage(), e);
-            }
-        }).flatMap(fileService::save);
-    }
-
-    // Nouvelle méthode pour lire le contenu de la version précédente
-    private Mono<String> readVersionContent(UUID folderId, int previousVersion) {
-        String fileName = "V" + previousVersion + "_contracts.xml";
-        Path filePath = Paths.get(BASE_DIR + folderId + "/" + fileName);
-
-        return Mono.fromCallable(() ->
-                Files.readString(filePath, StandardCharsets.UTF_8)
-        ).subscribeOn(Schedulers.boundedElastic());
     }
     private Mono<Tuple2<String, String>> readContractsAndErrors(UUID folderId, FileEntity contractsFileEntity, FileEntity errorsFileEntity) {
         Path contractsPath = Paths.get(BASE_DIR + folderId + "/" + contractsFileEntity.name());
@@ -595,9 +480,10 @@ public class FileProcessingService {
                 String codeOpenTag = "<" + contractChildTag + ">";
                 String codeCloseTag = "</" + contractChildTag + ">";
 
-                // Trouver toutes les balises contractParentTag dans le document
-                List<Triple<Integer, Integer, String>> contracts = new ArrayList<>();
+                // Extraire tous les codes de contrat du document
+                Map<String, String> contractCodes = new HashMap<>();
                 int searchPos = 0;
+                int contractIndex = 0;
 
                 while (searchPos < xmlContent.length()) {
                     int startTagPos = xmlContent.indexOf(openTag, searchPos);
@@ -617,58 +503,40 @@ public class FileProcessingService {
                         int codeValueEnd = contractContent.indexOf(codeCloseTag, codeValueStart);
                         if (codeValueEnd != -1) {
                             contractCode = contractContent.substring(codeValueStart, codeValueEnd);
+                            contractCodes.put(String.valueOf(contractIndex), contractCode);
                         }
                     }
 
-                    contracts.add(Triple.of(startTagPos, endTagPos, contractCode));
                     searchPos = endTagPos;
+                    contractIndex++;
                 }
 
-                // Pour chaque référence d'erreur, trouver le contrat correspondant
+                // Pour chaque référence d'erreur, associer au code de contrat correspondant
                 for (String reference : errorReferences) {
                     try {
                         int position = Integer.parseInt(reference);
-                        boolean foundContract = false;
 
-                        // D'abord chercher si la position est directement dans un contrat
-                        for (Triple<Integer, Integer, String> contract : contracts) {
-                            int start = contract.getLeft();
-                            int end = contract.getMiddle();
-                            String code = contract.getRight();
+                        // Utiliser la position pour trouver le contrat correspondant
+                        // Nous cherchons le contrat avec l'index le plus proche de la position
+                        String closestContractIndex = null;
+                        int minDistance = Integer.MAX_VALUE;
 
-                            if (position >= start && position < end) {
-                                errorContracts.add(new ErrorContract(reference, code, start, end));
-                                referencesProcessed.put(reference, true);
-                                foundContract = true;
-                                break;
+                        for (String index : contractCodes.keySet()) {
+                            int contractIdx = Integer.parseInt(index);
+                            int distance = Math.abs(contractIdx - position);
+
+                            if (distance < minDistance) {
+                                minDistance = distance;
+                                closestContractIndex = index;
                             }
                         }
 
-                        // Si on n'a pas trouvé, chercher le contrat le plus proche après cette position
-                        if (!foundContract) {
-                            Triple<Integer, Integer, String> closestContract = null;
-                            int minDistance = Integer.MAX_VALUE;
-
-                            for (Triple<Integer, Integer, String> contract : contracts) {
-                                int start = contract.getLeft();
-
-                                if (start > position && (start - position) < minDistance) {
-                                    minDistance = start - position;
-                                    closestContract = contract;
-                                }
-                            }
-
-                            if (closestContract != null) {
-                                errorContracts.add(new ErrorContract(
-                                        reference,
-                                        closestContract.getRight(),
-                                        closestContract.getLeft(),
-                                        closestContract.getMiddle()
-                                ));
-                                referencesProcessed.put(reference, true);
-                            } else {
-                                log.warn("No appropriate contract found for reference {}", reference);
-                            }
+                        if (closestContractIndex != null) {
+                            String code = contractCodes.get(closestContractIndex);
+                            errorContracts.add(new ErrorContract(reference, code));
+                            referencesProcessed.put(reference, true);
+                        } else {
+                            log.warn("No appropriate contract found for reference {}", reference);
                         }
                     } catch (NumberFormatException e) {
                         log.warn("Invalid position reference: {}", reference);
@@ -681,9 +549,6 @@ public class FileProcessingService {
                         log.warn("Reference not processed: {}", entry.getKey());
                     }
                 }
-
-                // Trier les contrats d'erreur par position pour un traitement cohérent
-                errorContracts.sort(Comparator.comparingInt(ErrorContract::getStartPosition));
 
                 log.info("Found {} error contracts from {} error references",
                         errorContracts.size(), errorReferences.size());
@@ -888,167 +753,6 @@ public class FileProcessingService {
             log.info("Created detailed processing report for folder {}", folderId);
         } catch (IOException e) {
             log.error("Failed to create detailed processing report", e);
-        }
-    }
-    // Méthode modifiée pour accepter une liste de références à supprimer
-    private Mono<FileEntity> generateNewContractVersion(UUID folderId, String contractsContent,
-                                                        List<String> references, int version,
-                                                        String contractParentTag, String contractChildTag) {
-        return Mono.fromCallable(() -> {
-            try {
-                String updatedContent = contractsContent;
-                List<String> removedCodes = new ArrayList<>();
-
-                // Traiter chaque référence à supprimer
-                for (String reference : references) {
-                    Tuple2<String, String> result = removeContractByReference(
-                            updatedContent, reference, contractParentTag, contractChildTag);
-
-                    updatedContent = result.getT1();
-                    String removedContractCode = result.getT2();
-
-                    if (removedContractCode == null || removedContractCode.isEmpty()) {
-                        log.warn("No contract found for reference: {}", reference);
-                        removedContractCode = "not-found-" + reference;
-                    }
-
-                    removedCodes.add(removedContractCode);
-                }
-
-                // Save the updated content
-                String fileName = "V" + version + "_contracts.xml";
-                Path targetPath = Paths.get(BASE_DIR + folderId + "/" + fileName);
-                Files.createDirectories(targetPath.getParent());
-                Files.writeString(targetPath, updatedContent);
-
-                // Save all removed contract IDs for this version
-                for (int i = 0; i < references.size(); i++) {
-                    saveRemovedContractId(folderId, references.get(i), removedCodes.get(i), version);
-                }
-
-                // Create file entity
-                FileEntity versionedFile = new FileEntity(
-                        fileName,
-                        "versioning",
-                        version,
-                        folderId
-                );
-
-                return versionedFile;
-            } catch (Exception e) {
-                log.error("Error generating version file", e);
-                throw new RuntimeException("Error generating version file: " + e.getMessage(), e);
-            }
-        }).flatMap(fileService::save);
-    }
-
-    private Tuple2<String, String> removeContractByReference(String xmlContent, String reference,
-                                                             String contractParentTag, String contractChildTag) {
-        try {
-            // Convertir reference en position numérique
-            int position = Integer.parseInt(reference);
-
-            // Vérifier si la position est valide
-            if (position < 0 || position >= xmlContent.length()) {
-                log.warn("Position {} hors limites du document XML", position);
-                return Tuples.of(xmlContent, null);
-            }
-
-            // Balises à rechercher
-            String openTag = "<" + contractParentTag;
-            String closeTag = "</" + contractParentTag + ">";
-
-            // Liste de toutes les balises contractParentTag
-            List<Pair<Integer, Integer>> contractTags = new ArrayList<>();
-
-            // Trouver toutes les balises contractParentTag dans le document
-            int searchPos = 0;
-            while (searchPos < xmlContent.length()) {
-                int startTagPos = xmlContent.indexOf(openTag, searchPos);
-                if (startTagPos == -1) break;
-
-                int endTagPos = xmlContent.indexOf(closeTag, startTagPos);
-                if (endTagPos == -1) break;
-
-                endTagPos += closeTag.length();
-                contractTags.add(Pair.of(startTagPos, endTagPos));
-                searchPos = endTagPos;
-            }
-
-            // Trouver la balise qui contient notre position
-            for (Pair<Integer, Integer> tagPair : contractTags) {
-                int start = tagPair.getFirst();
-                int end = tagPair.getSecond();
-
-                // Si la position est dans cette balise
-                if (position >= start && position < end) {
-                    // Extraire le contenu du contrat à supprimer
-                    String contractContent = xmlContent.substring(start, end);
-
-                    // Extraire le code du contrat si disponible
-                    String contractCode = null;
-                    String codeOpenTag = "<" + contractChildTag + ">";
-                    String codeCloseTag = "</" + contractChildTag + ">";
-                    int codeStart = contractContent.indexOf(codeOpenTag);
-                    if (codeStart != -1) {
-                        int codeValueStart = codeStart + codeOpenTag.length();
-                        int codeValueEnd = contractContent.indexOf(codeCloseTag, codeValueStart);
-                        if (codeValueEnd != -1) {
-                            contractCode = contractContent.substring(codeValueStart, codeValueEnd);
-                        }
-                    }
-
-                    // Créer le nouveau contenu XML sans le contrat
-                    String updatedContent = xmlContent.substring(0, start) +
-                            xmlContent.substring(end);
-
-                    log.info("Supprimé le contrat à la position {} avec code: {}", position, contractCode);
-                    return Tuples.of(updatedContent, contractCode);
-                }
-            }
-
-            // Si on arrive ici, aucun contrat contenant la position n'a été trouvé
-            // Dans ce cas, chercher le contrat suivant
-            for (Pair<Integer, Integer> tagPair : contractTags) {
-                int start = tagPair.getFirst();
-
-                // Si cette balise commence après notre position
-                if (start > position) {
-                    int end = tagPair.getSecond();
-                    String contractContent = xmlContent.substring(start, end);
-
-                    // Extraire le code du contrat si disponible
-                    String contractCode = null;
-                    String codeOpenTag = "<" + contractChildTag + ">";
-                    String codeCloseTag = "</" + contractChildTag + ">";
-                    int codeStart = contractContent.indexOf(codeOpenTag);
-                    if (codeStart != -1) {
-                        int codeValueStart = codeStart + codeOpenTag.length();
-                        int codeValueEnd = contractContent.indexOf(codeCloseTag, codeValueStart);
-                        if (codeValueEnd != -1) {
-                            contractCode = contractContent.substring(codeValueStart, codeValueEnd);
-                        }
-                    }
-
-                    // Créer le nouveau contenu XML sans le contrat
-                    String updatedContent = xmlContent.substring(0, start) +
-                            xmlContent.substring(end);
-
-                    log.info("Aucun contrat trouvé à la position {}, supprimé le contrat suivant avec code: {}",
-                            position, contractCode);
-                    return Tuples.of(updatedContent, contractCode);
-                }
-            }
-
-            log.warn("Aucun contrat trouvé à ou après la position {}", position);
-            return Tuples.of(xmlContent, null);
-
-        } catch (NumberFormatException e) {
-            log.error("La référence doit être un nombre valide", e);
-            return Tuples.of(xmlContent, null);
-        } catch (Exception e) {
-            log.error("Erreur lors de la suppression du contrat par référence", e);
-            return Tuples.of(xmlContent, null);
         }
     }
 

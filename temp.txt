@@ -1,821 +1,244 @@
-@Service
-@RequiredArgsConstructor
-@Slf4j
-public class FileProcessingService {
-    private final FolderService folderService;
-    private final FileService fileService;
-    private final TransactionalOperator transactionalOperator;
-    private final Map<UUID, Sinks.Many<ProgressEvent>> progressSinks = new HashMap<>();
-
-    @Value("${server.folder-path}")
-    private String BASE_DIR;
-
-    private int totalErrors;
-    private  List<String> processedErrorReferences = new ArrayList<>();
-    public Mono<FolderDTO> createFolder(UploadRequest request) {
-        FolderEntity folder = new FolderEntity(
-                request.name(),
-                BCEAOStatus.INDEFINI.label, // par défaut statut indéfini
-                request.period(),
-                0,
-                FolderStatus.CREATED.name(),
-                LocalDateTime.now(),
-                LocalDateTime.now()
-        );
-        return folderService.getByPeriod(request.period())
-                .hasElement()
-                .flatMap(exists -> {
-                    if(exists){
-                        return Mono.error(new DuplicatePeriodFolderException(folder.period()));
-                    }else if(getYearInPeriod(request.period()) > LocalDateTime.now().getYear()){
-                        return Mono.error(new InvalidYearException(String.valueOf(getYearInPeriod(folder.period()))));
-                    }
-                    return folderService.save(folder);
-                })
-                .flatMap(folderSaved -> Mono.fromCallable(() -> {
-                    Path path = Paths.get(BASE_DIR + folderSaved.id());
-                    Files.createDirectories(path);
-                    return folderSaved;
-                }).subscribeOn(Schedulers.boundedElastic()))
-                .map(folderEntity -> {
-                    progressSinks.put(folderEntity.id(), Sinks.many().multicast().onBackpressureBuffer());
-                    return new FolderDTO(folderEntity.id(), folderEntity.name(), folderEntity.status());
-                })
-                .as(transactionalOperator::transactional)
-                .onErrorResume(e -> {
-                    if (e instanceof BusinessException) {
-                        return Mono.error(e); // Ne tente pas de supprimer si c'est un doublon
-                    }
-                    System.err.println("Erreur lors de la création du dossier : " + e.getMessage());
-                    return folderService.delete(folder)
-                            .then(Mono.error(e));
-                });
-
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>À Propos - CRP Contract Fixer | Chido</title>
+  <style>
+    :root {
+      --primary-color: #C6183D;
+      --primary-dark: #A11432;
+      --primary-light: #E13F60;
+      --text-color: #333;
+      --light-text: #777;
+      --bg-light: #f8f9fa;
     }
-
-    public Flux<ProgressEvent> getProgressUpdates(UUID folderId) {
-        return progressSinks.getOrDefault(folderId, Sinks.many().multicast().onBackpressureBuffer())
-                .asFlux();
+    
+    body {
+      font-family: 'Roboto', sans-serif;
+      line-height: 1.6;
+      color: var(--text-color);
+      margin: 0;
+      padding: 0;
     }
-
-    public Mono<Void> processFiles(UUID folderId, FilePart contractsFile, FilePart errorsFile,
-                                   String contractParentTag, String contractChildTag,
-                                   String errorParentTag, String errorChildTag) {
-        Sinks.Many<ProgressEvent> sink = progressSinks.get(folderId);
-        AtomicInteger progress = new AtomicInteger(0);
-
-        return folderService.findById(folderId)
-                .switchIfEmpty(Mono.error(new RuntimeException("Folder not found: " + folderId)))
-                .timeout(Duration.ofSeconds(300))
-                .flatMap(folder -> {
-                    // Update folder status
-                    FolderEntity updatedFolder = new FolderEntity(
-                            folder.id(),
-                            folder.name(),
-                            folder.bceaoStatus(),
-                            folder.period(),
-                            0,
-                            FolderStatus.PROCESSING.name(),
-                            folder.createdAt(),
-                            LocalDateTime.now()
-                    );
-                    return folderService.save(updatedFolder);
-                })
-                .doOnNext(folder -> {
-                    sink.tryEmitNext(new ProgressEvent(folderId, progress.get(), "Démarrage du traitement des fichiers", "PROCESSING"));
-                })
-                .then(saveFile(folderId, contractsFile, "original", 0))
-                .doOnSuccess(file -> {
-                    progress.addAndGet(10);
-                    sink.tryEmitNext(new ProgressEvent(folderId, progress.get(), "Fichier de contrats XML enregistré", "PROCESSING"));
-                })
-                .then(saveFile(folderId, errorsFile, "errors", 0))
-                .doOnSuccess(file -> {
-                    progress.addAndGet(10);
-                    sink.tryEmitNext(new ProgressEvent(folderId, progress.get(), "Fichier d'erreurs XML enregistré", "PROCESSING"));
-                })
-                .then(processXmlFiles(folderId, progress, sink, contractParentTag, contractChildTag, errorParentTag, errorChildTag))
-                .onErrorResume(e -> {
-                    log.error("Erreur lors du traitement des fichiers XML", e);
-                    sink.tryEmitNext(new ProgressEvent(folderId, progress.get(), "Error: " + e.getMessage(), "ERROR"));
-                    sink.tryEmitComplete();
-                    return updateFolderStatus(folderId, FolderStatus.ERROR.name()).then();
-                })
-                .then();
+    
+    .container {
+      max-width: 1140px;
+      margin: 0 auto;
+      padding: 2rem 15px;
     }
-
-    private Mono<FileEntity> saveFile(UUID folderId, FilePart filePart, String type, int version) {
-        String fileName = filePart.filename();
-        if (version > 0) {
-            // Ajouter la version au nom du fichier s'il s'agit d'un fichier versionné
-            fileName = getTotalErrors() == version ? "clean_contracts" : "V" + version + "_" + fileName;
-        }
-
-        Path targetPath = Paths.get(BASE_DIR + folderId + "/" + fileName);
-        FileEntity fileEntity = new FileEntity(
-                fileName,
-                type,
-                version,
-                folderId
-        );
-
-        return filePart.transferTo(targetPath.toFile())
-                .then(fileService.save(fileEntity));
+    
+    .about-header {
+      background-color: var(--primary-color);
+      color: white;
+      padding: 3rem 0;
+      text-align: center;
+      margin-bottom: 2rem;
     }
-
-    // Méthode modifiée pour le traitement des contrats qui évite les problèmes d'index
-    private Mono<Void> processErrorContracts(UUID folderId, String originalContent,
-                                             List<ErrorContract> errorContracts,
-                                             Sinks.Many<ProgressEvent> sink, AtomicInteger progress,
-                                             String contractParentTag) {
-        log.info("Processing {} error contracts for folder: {}", errorContracts.size(), folderId);
-
-        return Mono.fromCallable(() -> {
-                    // Extraire les balises XML de base (en-tête et début/fin du document)
-                    String xmlHeader = "";
-                    String xmlStart = "";
-                    String xmlEnd = "";
-
-                    // Extraire l'en-tête XML et la structure du document
-                    int xmlDeclEnd = originalContent.indexOf("?>") + 2;
-                    if (xmlDeclEnd > 2) {
-                        xmlHeader = originalContent.substring(0, xmlDeclEnd);
-                    }
-
-                    // Trouver la balise racine
-                    int rootStart = originalContent.indexOf("<", xmlDeclEnd);
-                    int rootNameEnd = originalContent.indexOf(" ", rootStart);
-                    if (rootNameEnd == -1) rootNameEnd = originalContent.indexOf(">", rootStart);
-
-                    String rootTag = "";
-                    if (rootStart >= 0 && rootNameEnd > rootStart) {
-                        rootTag = originalContent.substring(rootStart + 1, rootNameEnd);
-
-                        // Trouver la fin de la balise d'ouverture
-                        int openTagEnd = originalContent.indexOf(">", rootStart) + 1;
-                        if (openTagEnd > 0) {
-                            xmlStart = originalContent.substring(0, openTagEnd);
-
-                            // Trouver la balise de fermeture
-                            String closeTag = "</" + rootTag + ">";
-                            int closeTagStart = originalContent.lastIndexOf(closeTag);
-                            if (closeTagStart > 0) {
-                                xmlEnd = originalContent.substring(closeTagStart);
-                            }
-                        }
-                    }
-
-                    log.info("XML structure extracted for folder {}: header={}, root tag={}",
-                            folderId, xmlHeader.length() > 0, rootTag);
-
-                    // Balises à rechercher
-                    String openTag = "<" + contractParentTag;
-                    String closeTag = "</" + contractParentTag + ">";
-                    // Balise pour le code du contrat
-                    String codeTag = contractParentTag.replaceAll("s$", "") + "Code"; // Exemple: "contrats" -> "contratCode"
-                    String codeOpenTag = "<" + codeTag + ">";
-                    String codeCloseTag = "</" + codeTag + ">";
-
-                    // Créer un ensemble des codes de contrats à supprimer pour recherche rapide
-                    Set<String> contractCodesToRemove = errorContracts.stream()
-                            .map(ErrorContract::getCode)
-                            .collect(Collectors.toSet());
-
-                    // Analyser le contenu original et reconstruire sans les contrats problématiques
-                    StringBuilder newXmlContent = new StringBuilder();
-                    if (xmlStart.length() > 0) {
-                        newXmlContent.append(xmlStart);
-                    } else {
-                        // Fallback si on n'a pas pu extraire correctement la structure
-                        newXmlContent.append(xmlHeader);
-                        newXmlContent.append("<root>");
-                    }
-
-                    int searchPos = xmlStart.length() > 0 ? xmlStart.length() : (xmlHeader.length() + 7);
-                    int contractIndex = 0;
-                    int removedCount = 0;
-
-                    // Parcourir tous les contrats et ne garder que ceux qui ne sont pas à supprimer
-                    while (searchPos < originalContent.length() &&
-                            (xmlEnd.isEmpty() || searchPos < originalContent.length() - xmlEnd.length())) {
-                        int startTagPos = originalContent.indexOf(openTag, searchPos);
-                        if (startTagPos == -1 || (xmlEnd.length() > 0 && startTagPos >= originalContent.length() - xmlEnd.length()))
-                            break;
-
-                        int endTagPos = originalContent.indexOf(closeTag, startTagPos);
-                        if (endTagPos == -1) break;
-
-                        endTagPos += closeTag.length();
-                        String contractContent = originalContent.substring(startTagPos, endTagPos);
-
-                        // Extraire le code du contrat
-                        String contractCode = null;
-                        int codeStart = contractContent.indexOf(codeOpenTag);
-                        if (codeStart != -1) {
-                            int codeValueStart = codeStart + codeOpenTag.length();
-                            int codeValueEnd = contractContent.indexOf(codeCloseTag, codeValueStart);
-                            if (codeValueEnd != -1) {
-                                contractCode = contractContent.substring(codeValueStart, codeValueEnd);
-                            }
-                        }
-
-                        // Vérifier si ce contrat doit être supprimé en se basant sur le code
-                        boolean shouldRemove = contractCode != null && contractCodesToRemove.contains(contractCode);
-
-                        if (shouldRemove) {
-                            log.info("Removing contract with code {} (contract #{}) for folder {}",
-                                    contractCode, contractIndex, folderId);
-                            removedCount++;
-
-                            // Ajouter le contenu entre le dernier contrat et celui-ci
-                            if (searchPos < startTagPos) {
-                                newXmlContent.append(originalContent, searchPos, startTagPos);
-                            }
-                        } else {
-                            // Ajouter le contenu entre le dernier contrat et celui-ci, puis le contrat lui-même
-                            newXmlContent.append(originalContent, searchPos, endTagPos);
-                        }
-
-                        searchPos = endTagPos;
-                        contractIndex++;
-
-                        // Mettre à jour la progression périodiquement
-                        if (contractIndex % 100 == 0) {
-                            int newProgress = 20 + (contractIndex * 70 / (errorContracts.size() + contractIndex));
-                            progress.set(newProgress);
-                            sink.tryEmitNext(new ProgressEvent(
-                                    folderId,
-                                    progress.get(),
-                                    "Traitement des contrats: " + contractIndex + " analysés, " +
-                                            removedCount + " supprimés",
-                                    FolderStatus.PROCESSING.name()
-                            ));
-                        }
-                    }
-
-                    // Ajouter le contenu restant après le dernier contrat
-                    if (xmlEnd.length() > 0) {
-                        newXmlContent.append(xmlEnd);
-                    } else {
-                        // S'il y a encore du contenu après le dernier contrat
-                        if (searchPos < originalContent.length()) {
-                            newXmlContent.append(originalContent.substring(searchPos));
-                        }
-                        newXmlContent.append("</root>");
-                    }
-
-                    // Sauvegarder la version finale
-                    String fileName = "V1_contracts.xml";
-                    Path targetPath = Paths.get(BASE_DIR + folderId + "/" + fileName);
-                    Files.createDirectories(targetPath.getParent());
-                    Files.writeString(targetPath, newXmlContent.toString());
-
-                    // Sauvegarder les informations des contrats supprimés
-                    for (int i = 0; i < errorContracts.size(); i++) {
-                        ErrorContract errorContract = errorContracts.get(i);
-                        saveRemovedContractId(folderId, errorContract.getReference(), errorContract.getCode(), 1);
-                    }
-
-                    // Créer l'entité fichier
-                    FileEntity versionedFile = new FileEntity(
-                            fileName,
-                            "versioning",
-                            1,
-                            folderId
-                    );
-
-                    return versionedFile;
-                })
-                .flatMap(fileService::save)
-                .then();
+    
+    .company-logo {
+      max-height: 60px;
+      margin-bottom: 1rem;
     }
-
-    // Remplacer la partie du processXmlFiles qui traite les contrats par cette nouvelle approche
-    private Mono<Void> processXmlFiles(UUID folderId, AtomicInteger progress,
-                                       Sinks.Many<ProgressEvent> sink,
-                                       String contractParentTag, String contractChildTag,
-                                       String errorParentTag, String errorChildTag) {
-        log.info("Starting XML processing for folder: {}", folderId);
-
-        return fileService.findByFolderIdAndType(folderId, "original")
-                .take(1)
-                .zipWith(fileService.findByFolderIdAndType(folderId, "errors").take(1))
-                .flatMap(tuple -> {
-                    FileEntity contractsFileEntity = tuple.getT1();
-                    FileEntity errorsFileEntity = tuple.getT2();
-                    log.info("Found original file: {} and errors file: {} for folder: {}",
-                            contractsFileEntity.name(), errorsFileEntity.name(), folderId);
-
-                    return readContractsAndErrors(folderId, contractsFileEntity, errorsFileEntity)
-                            .flatMap(result -> {
-                                String originalContractsContent = result.getT1();
-                                String errorsContent = result.getT2();
-                                log.info("Read contracts and errors content for folder: {}", folderId);
-
-                                // Extract references from error XML with improved logging
-                                List<String> errorReferences = extractErrorReferences(errorsContent, errorParentTag, errorChildTag);
-
-                                // Ajouter un log détaillé des références extraites
-                                log.info("Extracted error references: {}", errorReferences);
-
-                                // Vérifier les doublons
-                                Set<String> uniqueReferences = new HashSet<>(errorReferences);
-                                if (uniqueReferences.size() < errorReferences.size()) {
-                                    log.warn("Found {} duplicate references in error file",
-                                            errorReferences.size() - uniqueReferences.size());
-                                }
-
-                                int totalErrors = errorReferences.size();
-                                setTotalErrors(totalErrors);
-
-                                // Sauvegarder toutes les références d'erreur dans un fichier pour référence
-                                saveErrorReferencesToFile(folderId, errorReferences);
-
-                                log.info("Found {} error references to process for folder: {}", totalErrors, folderId);
-
-                                if (totalErrors == 0) {
-                                    sink.tryEmitNext(new ProgressEvent(
-                                            folderId,
-                                            progress.get(),
-                                            "Aucune référence d'erreur trouvée dans le fichier d'erreurs",
-                                            FolderStatus.PROCESSING.name()
-                                    ));
-                                    return finalizeFolderProcessing(folderId, sink, progress);
-                                }
-
-                                // Trouver tous les contrats problématiques avec une méthode
-                                return findErrorContractsImproved(originalContractsContent, errorReferences, contractParentTag, contractChildTag)
-                                        .flatMap(errorContracts -> {
-                                            log.info("Found {} problematic contracts for folder: {}", errorContracts.size(), folderId);
-
-                                            // Vérifier si toutes les références ont été traitées
-                                            Set<String> processedRefs = errorContracts.stream()
-                                                    .map(ErrorContract::getReference)
-                                                    .collect(Collectors.toSet());
-
-                                            Set<String> missingRefs = new HashSet<>(errorReferences);
-                                            missingRefs.removeAll(processedRefs);
-
-                                            if (!missingRefs.isEmpty()) {
-                                                log.warn("Some error references could not be matched to contracts: {}", missingRefs);
-                                                // Sauvegarder les références non traitées
-                                                saveUnprocessedReferences(folderId, missingRefs);
-                                            }
-
-                                            // Utiliser notre nouvelle approche pour traiter tous les contrats en une seule passe
-                                            return processErrorContracts(folderId, originalContractsContent, errorContracts, sink, progress, contractParentTag)
-                                                    .then(finalizeFolderProcessing(folderId, sink, progress));
-                                        });
-                            });
-                })
-                .then();
+    
+    .about-content {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 2rem;
     }
-    // Méthode améliorée pour extraire les références d'erreur
-    private List<String> extractErrorReferences(String xmlContent, String parentTag, String childTag) {
-        List<String> references = new ArrayList<>();
-        try {
-            DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
-            // Désactiver la validation DTD pour éviter les problèmes de parsing
-            factory.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false);
-            factory.setFeature("http://xml.org/sax/features/namespaces", false);
-            factory.setFeature("http://xml.org/sax/features/validation", false);
-
-            DocumentBuilder builder = factory.newDocumentBuilder();
-
-            // Add root element if not present (for fragment processing)
-            if (!xmlContent.trim().startsWith("<?xml") && !xmlContent.trim().startsWith("<")) {
-                xmlContent = "<root>" + xmlContent + "</root>";
-            }
-
-            // Parse XML content
-            Document document = builder.parse(new org.xml.sax.InputSource(new StringReader(xmlContent)));
-
-            // Get all parent tag elements
-            NodeList parentElements = document.getElementsByTagName(parentTag);
-            log.info("Found {} {} elements in error file", parentElements.getLength(), parentTag);
-
-            // Extract reference values from child tags
-            for (int i = 0; i < parentElements.getLength(); i++) {
-                Element parentElement = (Element) parentElements.item(i);
-                NodeList childElements = parentElement.getElementsByTagName(childTag);
-
-                if (childElements.getLength() > 0) {
-                    String referenceValue = childElements.item(0).getTextContent().trim();
-                    if (!referenceValue.isEmpty()) {
-                        // Traitement amélioré pour extraire uniquement la position numérique
-                        String cleanedReference = referenceValue;
-                        // Pour supprimer "LIGNE 2;COLONNE " qui est présent sur les fichiers XML
-                        if (referenceValue.contains("LIGNE 2;COLONNE ")) {
-                            cleanedReference = referenceValue.replace("LIGNE 2;COLONNE ", "");
-                        } else if (referenceValue.contains("LIGNE") || referenceValue.contains("COLONNE")) {
-                            // Extraire seulement les chiffres si le format est différent
-                            cleanedReference = referenceValue.replaceAll("[^0-9]", "");
-                        }
-
-                        references.add(cleanedReference);
-                        log.info("Extracted reference: {} -> {}", referenceValue, cleanedReference);
-                    }
-                }
-            }
-
-            // Trier les références par ordre numérique pour un traitement plus cohérent
-            references.sort((a, b) -> {
-                try {
-                    return Integer.parseInt(a) - Integer.parseInt(b);
-                } catch (NumberFormatException e) {
-                    return a.compareTo(b);
-                }
-            });
-
-        } catch (Exception e) {
-            log.error("Error parsing XML for error references", e);
-        }
-        return references;
+    
+    .about-text {
+      flex: 2;
+      min-width: 300px;
     }
-    // Classe pour stocker les informations des contrats problématiques
-    private static class ErrorContract {
-        private final String reference;
-        private final String code;
-
-        public ErrorContract(String reference, String code) {
-            this.reference = reference;
-            this.code = code;
-        }
-
-        public String getReference() {
-            return reference;
-        }
-
-        public String getCode() {
-            return code;
-        }
+    
+    .about-sidebar {
+      flex: 1;
+      min-width: 250px;
+      background-color: var(--bg-light);
+      padding: 1.5rem;
+      border-radius: 4px;
     }
-    private Mono<Tuple2<String, String>> readContractsAndErrors(UUID folderId, FileEntity contractsFileEntity, FileEntity errorsFileEntity) {
-        Path contractsPath = Paths.get(BASE_DIR + folderId + "/" + contractsFileEntity.name());
-        Path errorsPath = Paths.get(BASE_DIR + folderId + "/" + errorsFileEntity.name());
-
-        return Mono.fromCallable(() -> {
-            String contracts = Files.readString(contractsPath, StandardCharsets.UTF_8);
-            String errors = Files.readString(errorsPath, StandardCharsets.UTF_8);
-            return Tuples.of(contracts, errors);
-        });
+    
+    .team-section {
+      margin-top: 3rem;
     }
-
-    // Nouvelle méthode pour trouver les contrats problématiques de manière plus robuste
-    private Mono<List<ErrorContract>> findErrorContractsImproved(String xmlContent, List<String> errorReferences,
-                                                                 String contractParentTag, String contractChildTag) {
-        return Mono.fromCallable(() -> {
-            List<ErrorContract> errorContracts = new ArrayList<>();
-            Map<String, Boolean> referencesProcessed = new HashMap<>();
-
-            // Initialiser toutes les références comme non traitées
-            for (String ref : errorReferences) {
-                referencesProcessed.put(ref, false);
-            }
-
-            try {
-                // Balises à rechercher
-                String openTag = "<" + contractParentTag;
-                String closeTag = "</" + contractParentTag + ">";
-                String codeOpenTag = "<" + contractChildTag + ">";
-                String codeCloseTag = "</" + contractChildTag + ">";
-
-                // Extraire tous les codes de contrat du document
-                Map<String, String> contractCodes = new HashMap<>();
-                int searchPos = 0;
-                int contractIndex = 0;
-
-                while (searchPos < xmlContent.length()) {
-                    int startTagPos = xmlContent.indexOf(openTag, searchPos);
-                    if (startTagPos == -1) break;
-
-                    int endTagPos = xmlContent.indexOf(closeTag, startTagPos);
-                    if (endTagPos == -1) break;
-
-                    endTagPos += closeTag.length();
-                    String contractContent = xmlContent.substring(startTagPos, endTagPos);
-
-                    // Extraire le code du contrat
-                    String contractCode = null;
-                    int codeStart = contractContent.indexOf(codeOpenTag);
-                    if (codeStart != -1) {
-                        int codeValueStart = codeStart + codeOpenTag.length();
-                        int codeValueEnd = contractContent.indexOf(codeCloseTag, codeValueStart);
-                        if (codeValueEnd != -1) {
-                            contractCode = contractContent.substring(codeValueStart, codeValueEnd);
-                            contractCodes.put(String.valueOf(contractIndex), contractCode);
-                        }
-                    }
-
-                    searchPos = endTagPos;
-                    contractIndex++;
-                }
-
-                // Pour chaque référence d'erreur, associer au code de contrat correspondant
-                for (String reference : errorReferences) {
-                    try {
-                        int position = Integer.parseInt(reference);
-
-                        // Utiliser la position pour trouver le contrat correspondant
-                        // Nous cherchons le contrat avec l'index le plus proche de la position
-                        String closestContractIndex = null;
-                        int minDistance = Integer.MAX_VALUE;
-
-                        for (String index : contractCodes.keySet()) {
-                            int contractIdx = Integer.parseInt(index);
-                            int distance = Math.abs(contractIdx - position);
-
-                            if (distance < minDistance) {
-                                minDistance = distance;
-                                closestContractIndex = index;
-                            }
-                        }
-
-                        if (closestContractIndex != null) {
-                            String code = contractCodes.get(closestContractIndex);
-                            errorContracts.add(new ErrorContract(reference, code));
-                            referencesProcessed.put(reference, true);
-                        } else {
-                            log.warn("No appropriate contract found for reference {}", reference);
-                        }
-                    } catch (NumberFormatException e) {
-                        log.warn("Invalid position reference: {}", reference);
-                    }
-                }
-
-                // Vérifier les références non traitées
-                for (Map.Entry<String, Boolean> entry : referencesProcessed.entrySet()) {
-                    if (!entry.getValue()) {
-                        log.warn("Reference not processed: {}", entry.getKey());
-                    }
-                }
-
-                log.info("Found {} error contracts from {} error references",
-                        errorContracts.size(), errorReferences.size());
-
-                return errorContracts;
-
-            } catch (Exception e) {
-                log.error("Error finding problematic contracts", e);
-                throw new RuntimeException("Error finding problematic contracts: " + e.getMessage(), e);
-            }
-        }).subscribeOn(Schedulers.boundedElastic());
+    
+    .team-members {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1.5rem;
+      justify-content: center;
     }
-    // Méthode pour sauvegarder toutes les références d'erreur dans un fichier
-    private void saveErrorReferencesToFile(UUID folderId, List<String> errorReferences) {
-        try {
-            Path filePath = Paths.get(BASE_DIR + folderId + "/all_error_references.txt");
-            Files.createDirectories(filePath.getParent());
-
-            List<String> lines = new ArrayList<>();
-            lines.add("Total error references found: " + errorReferences.size());
-            lines.add("References (sorted):");
-            for (int i = 0; i < errorReferences.size(); i++) {
-                lines.add((i+1) + ". " + errorReferences.get(i));
-            }
-
-            Files.write(filePath, lines);
-            log.info("Saved all {} error references to file for folder {}", errorReferences.size(), folderId);
-        } catch (IOException e) {
-            log.error("Failed to save error references to file", e);
-        }
+    
+    .team-member {
+      text-align: center;
+      flex: 1;
+      min-width: 200px;
+      max-width: 300px;
     }
-
-    // Méthode pour sauvegarder les références qui n'ont pas pu être traitées
-    private void saveUnprocessedReferences(UUID folderId, Set<String> missingRefs) {
-        try {
-            Path filePath = Paths.get(BASE_DIR + folderId + "/unprocessed_references.txt");
-            Files.createDirectories(filePath.getParent());
-
-            List<String> lines = new ArrayList<>();
-            lines.add("Total unprocessed references: " + missingRefs.size());
-            lines.add("Unprocessed references:");
-
-            int i = 1;
-            for (String ref : missingRefs) {
-                lines.add(i + ". " + ref);
-                i++;
-            }
-
-            Files.write(filePath, lines);
-            log.info("Saved {} unprocessed references to file for folder {}", missingRefs.size(), folderId);
-        } catch (IOException e) {
-            log.error("Failed to save unprocessed references to file", e);
-        }
+    
+    .team-member img {
+      width: 120px;
+      height: 120px;
+      border-radius: 50%;
+      object-fit: cover;
+      border: 3px solid var(--primary-color);
     }
-
-    private Mono<Void> finalizeFolderProcessing(UUID folderId, Sinks.Many<ProgressEvent> sink, AtomicInteger progress) {
-        log.info("Starting finalizeFolderProcessing for folder: {}", folderId);
-
-        return Mono.fromCallable(() -> {
-                    // Créer un rapport détaillé incluant toutes les informations sur le traitement
-                    createDetailedReport(folderId);
-
-                    // Create a file entity for removed_contracts.txt
-                    Path filePath = Paths.get(BASE_DIR + folderId + "/removed_contracts.txt");
-                    log.info("Checking for removed_contracts.txt at path: {}", filePath);
-
-                    FileEntity resultFile = null;
-                    if (Files.exists(filePath)) {
-                        log.info("Found existing removed_contracts.txt for folder {}", folderId);
-                        resultFile = new FileEntity(
-                                "removed_contracts.txt",
-                                "result",
-                                0,
-                                folderId
-                        );
-                    } else {
-                        log.info("Creating new removed_contracts.txt for folder {}", folderId);
-                        // Create an empty result file if it doesn't exist
-                        Files.createDirectories(filePath.getParent());
-                        Files.writeString(filePath, "No contracts were removed");
-
-                        resultFile = new FileEntity(
-                                "removed_contracts.txt",
-                                "result",
-                                0,
-                                folderId
-                        );
-                    }
-
-                    // Créer aussi une entité pour le rapport détaillé
-                    FileEntity reportFile = new FileEntity(
-                            "processing_report.txt",
-                            "report",
-                            0,
-                            folderId
-                    );
-
-                    log.info("Created FileEntity for removed_contracts.txt: {}", resultFile);
-                    return Tuples.of(resultFile, reportFile);
-                })
-                .flatMap(tuple -> {
-                    FileEntity resultFile = tuple.getT1();
-                    FileEntity reportFile = tuple.getT2();
-
-                    log.info("Saving FileEntity for removed_contracts.txt in folder: {}", folderId);
-                    return fileService.save(resultFile)
-                            .then(fileService.save(reportFile))
-                            .doOnSuccess(saved -> log.info("Successfully saved result files"))
-                            .doOnError(err -> log.error("Error saving result files: {}", err.getMessage()));
-                })
-                .flatMap(savedFile -> {
-                    log.info("Result files saved, now updating folder status to COMPLETED for folder: {}", folderId);
-                    return folderService.findById(folderId)
-                            .doOnSuccess(folder -> {
-                                if (folder != null) {
-                                    log.info("Found folder with ID: {}", folder.id());
-                                } else {
-                                    log.warn("Folder not found with ID: {}", folderId);
-                                }
-                            })
-                            .flatMap(folder -> {
-                                FolderEntity folderToSave = new FolderEntity(
-                                        folder.id(),
-                                        folder.name(),
-                                        folder.bceaoStatus(),
-                                        folder.period(),
-                                        getTotalErrors(), // Mettre à jour le nombre d'erreurs
-                                        FolderStatus.COMPLETED.name(),
-                                        folder.createdAt(),
-                                        LocalDateTime.now()
-                                );
-                                log.info("About to save updated folder: {} with status COMPLETED", folder.id());
-                                return folderService.save(folderToSave)
-                                        .doOnSuccess(saved -> log.info("Successfully updated folder status to COMPLETED for folder: {}", saved.id()))
-                                        .doOnError(err -> log.error("Error updating folder status: {}", err.getMessage()));
-                            });
-                })
-                .doOnSuccess(folder -> {
-                    log.info("Folder processing completed successfully for folder: {}", folderId);
-                    // Emit final progress event
-                    progress.set(100);
-                    try {
-                        sink.tryEmitNext(new ProgressEvent(
-                                folderId,
-                                100,
-                                "Traitement terminé avec succès (" + getTotalErrors() + " erreurs traitées)",
-                                FolderStatus.COMPLETED.name()
-                        ));
-                        log.info("Emitted final progress event for folder: {}", folderId);
-                        sink.tryEmitComplete();
-                        log.info("Completed progress sink for folder: {}", folderId);
-                    } catch (Exception e) {
-                        log.error("Error emitting final progress event: {}", e.getMessage());
-                    }
-                })
-                .doOnError(error -> {
-                    log.error("Error during finalization for folder {}: {}", folderId, error.getMessage(), error);
-                    try {
-                        sink.tryEmitNext(new ProgressEvent(
-                                folderId,
-                                progress.get(),
-                                "Error finalizing: " + error.getMessage(),
-                                FolderStatus.ERROR.name()
-                        ));
-                        sink.tryEmitComplete();
-                    } catch (Exception e) {
-                        log.error("Error emitting error progress event: {}", e.getMessage());
-                    }
-                })
-                .then()
-                .doOnTerminate(() -> {
-                    log.info("Finalization process terminated for folder: {}", folderId);
-                    // Réinitialiser les références traitées pour le prochain traitement
-                    processedErrorReferences.clear();
-                });
+    
+    .btn-primary {
+      background-color: var(--primary-color);
+      color: white;
+      padding: 0.5rem 1rem;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      text-decoration: none;
+      display: inline-block;
+      transition: background-color 0.3s;
     }
-
-    // Méthode pour créer un rapport détaillé du traitement
-    private void createDetailedReport(UUID folderId) {
-        try {
-            Path filePath = Paths.get(BASE_DIR + folderId + "/processing_report.txt");
-            Files.createDirectories(filePath.getParent());
-
-            List<String> lines = new ArrayList<>();
-            lines.add("=== RAPPORT DE TRAITEMENT ===");
-            lines.add("Dossier ID: " + folderId);
-            lines.add("Date de traitement: " + LocalDateTime.now());
-            lines.add("Nombre total d'erreurs: " + getTotalErrors());
-            lines.add("Nombre de références traitées: " + processedErrorReferences.size());
-
-            if (processedErrorReferences.size() < getTotalErrors()) {
-                lines.add("ATTENTION: " + (getTotalErrors() - processedErrorReferences.size()) +
-                        " références n'ont pas été traitées.");
-            }
-
-            lines.add("\n=== LISTE DES RÉFÉRENCES TRAITÉES ===");
-            for (int i = 0; i < processedErrorReferences.size(); i++) {
-                lines.add((i+1) + ". " + processedErrorReferences.get(i));
-            }
-
-            Files.write(filePath, lines);
-            log.info("Created detailed processing report for folder {}", folderId);
-        } catch (IOException e) {
-            log.error("Failed to create detailed processing report", e);
-        }
+    
+    .btn-primary:hover {
+      background-color: var(--primary-dark);
     }
-
-    private void saveRemovedContractId(UUID folderId, String reference, String contractCode, int version) {
-        try {
-            Path filePath = Paths.get(BASE_DIR + folderId + "/removed_contracts.txt");
-            Files.createDirectories(filePath.getParent());
-
-            // Créer l'entrée sans ajouter de saut de ligne supplémentaire
-            String entry = String.format("Version %d: Removed contract with reference %s and code %s",
-                    version, reference, contractCode);
-
-            if (Files.exists(filePath)) {
-                // Lire toutes les lignes du fichier
-                List<String> lines = Files.readAllLines(filePath);
-
-                // Filtrer les lignes pour exclure celle avec la même version
-                List<String> updatedLines = lines.stream()
-                        .filter(line -> !line.startsWith("Version " + version + ":"))
-                        .collect(Collectors.toList());
-
-                // Ajouter la nouvelle entrée
-                updatedLines.add(entry);
-
-                // Réécrire le fichier avec les lignes mises à jour, en joignant avec un saut de ligne
-                Files.write(filePath, updatedLines, StandardOpenOption.TRUNCATE_EXISTING);
-            } else {
-                // Si le fichier n'existe pas, simplement écrire la nouvelle entrée
-                Files.write(filePath, Collections.singletonList(entry));
-            }
-
-            log.info("Contract reference {} and code {} saved to removed_contracts.txt for version {}",
-                    reference, contractCode, version);
-        } catch (IOException e) {
-            log.error("Failed to save removed contract information", e);
-        }
+    
+    h1, h2, h3 {
+      color: var(--primary-color);
     }
-
-    private Mono<FolderEntity> updateFolderStatus(UUID folderId, String status) {
-        return folderService.findById(folderId)
-                .map(folder -> new FolderEntity(
-                        folder.id(),
-                        folder.name(),
-                        folder.bceaoStatus(),
-                        folder.period(),
-                        status.equals(FolderStatus.ERROR.name()) ? 0 : null,
-                        status,
-                        folder.createdAt(),
-                        LocalDateTime.now()
-                ))
-                .flatMap(folderService::save);
+    
+    .tech-stack {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      margin-top: 1rem;
     }
-
-    public int getTotalErrors() {
-        return totalErrors;
+    
+    .tech-badge {
+      background-color: var(--primary-light);
+      color: white;
+      padding: 0.25rem 0.75rem;
+      border-radius: 20px;
+      font-size: 0.9rem;
     }
-
-    public void setTotalErrors(int totalErrors) {
-        this.totalErrors = totalErrors;
+    
+    footer {
+      background-color: var(--bg-light);
+      padding: 1.5rem 0;
+      text-align: center;
+      margin-top: 3rem;
     }
-
-    public int getYearInPeriod(String period){
-        String[] yearChar=period.split("-");
-        return Integer.parseInt(yearChar[1]);
+    
+    .internal-badge {
+      display: inline-block;
+      background-color: var(--primary-color);
+      color: white;
+      padding: 0.25rem 0.75rem;
+      border-radius: 4px;
+      margin-left: 1rem;
+      font-size: 0.9rem;
+      vertical-align: middle;
     }
-}
+  </style>
+</head>
+<body>
+  <div class="about-header">
+    <div class="container">
+      <img src="/api/placeholder/200/60" alt="Chido Logo" class="company-logo">
+      <h1>CRP Contract Fixer <span class="internal-badge">Solution Interne</span></h1>
+      <p>Solution automatisée pour le traitement et la correction des contrats bancaires chez Chido</p>
+    </div>
+  </div>
+  
+  <div class="container">
+    <div class="about-content">
+      <div class="about-text">
+        <h2>Notre Solution</h2>
+        <p>CRP Contract Fixer est une application desktop développée en interne pour répondre aux besoins spécifiques de Chido dans le traitement des fichiers de contrats clients. Notre objectif est d'optimiser et d'automatiser le processus de correction des erreurs dans les contrats bancaires, permettant ainsi de gagner un temps précieux et de minimiser les risques d'erreurs humaines.</p>
+        
+        <h2>Le Projet</h2>
+        <p>Chez Chido, nous générons mensuellement des fichiers XML contenant jusqu'à 250 000 contrats clients. Un second fichier XML répertorie les erreurs présentes dans ces contrats en indiquant les numéros de colonnes affectées. Notre application interne permet d'automatiser entièrement le traitement de ces fichiers, offrant ainsi une solution efficace et fiable pour la gestion des contrats.</p>
+        
+        <p>Grâce à CRP Contract Fixer, les équipes de Chido peuvent :</p>
+        <ul>
+          <li>Importer et analyser rapidement les fichiers XML de contrats</li>
+          <li>Identifier automatiquement les erreurs signalées</li>
+          <li>Visualiser les contrats problématiques de manière claire</li>
+          <li>Appliquer des corrections en masse ou individuellement</li>
+          <li>Exporter les contrats corrigés dans le format requis</li>
+          <li>Générer des rapports détaillés sur les corrections effectuées</li>
+        </ul>
+        
+        <div class="tech-stack">
+          <div class="tech-badge">Angular</div>
+          <div class="tech-badge">Bootstrap</div>
+          <div class="tech-badge">XML</div>
+          <div class="tech-badge">Desktop App</div>
+        </div>
+      </div>
+      
+      <div class="about-sidebar">
+        <h3>Amélioration des Processus</h3>
+        <p>Pour Chido, cette solution interne permet de :</p>
+        <ul>
+          <li>Réduire le temps de traitement des contrats de 90%</li>
+          <li>Éliminer les erreurs humaines lors des corrections</li>
+          <li>Améliorer la traçabilité des modifications</li>
+          <li>Optimiser l'allocation des ressources humaines</li>
+          <li>Renforcer la sécurité des données sensibles</li>
+          <li>Standardiser le processus au sein de l'entreprise</li>
+        </ul>
+        
+        <a href="#contact" class="btn-primary">Contacter l'équipe</a>
+      </div>
+    </div>
+    
+    <div class="team-section">
+      <h2>L'Équipe du Projet</h2>
+      <p>Le développement de CRP Contract Fixer est le fruit d'une collaboration entre différents départements de Chido.</p>
+      
+      <div class="team-members">
+        <div class="team-member">
+          <img src="/api/placeholder/120/120" alt="Placeholder">
+          <h3>Abd Ali</h3>
+          <p>Développeur Stagiaire</p>
+          <p>Responsable du développement frontend avec Angular et Bootstrap</p>
+        </div>
+        
+        <div class="team-member">
+          <img src="/api/placeholder/120/120" alt="Placeholder">
+          <h3>Mme. A</h3>
+          <p>Responsable de Projet</p>
+          <p>Supervision et coordination du développement</p>
+        </div>
+        
+        <div class="team-member">
+          <img src="/api/placeholder/120/120" alt="Placeholder">
+          <h3>M. L</h3>
+          <p>Expert Technique</p>
+          <p>Conseiller technique et architecture système</p>
+        </div>
+        
+        <div class="team-member">
+          <img src="/api/placeholder/120/120" alt="Placeholder">
+          <h3>M. M</h3>
+          <p>Analyste Fonctionnel</p>
+          <p>Spécifications et tests fonctionnels</p>
+        </div>
+      </div>
+    </div>
+    
+    <div id="contact" class="team-section">
+      <h2>Remerciements</h2>
+      <p>Je tiens à exprimer ma profonde gratitude envers Madame A, Monsieur L et Monsieur M pour leur encadrement, leurs conseils précieux et leur confiance tout au long de mon stage chez Chido. Leur expertise et leur disponibilité ont été déterminantes dans le développement réussi de cette solution interne.</p>
+      
+      <p>Un remerciement particulier à toute l'équipe de Chido qui m'a accueilli comme stagiaire et m'a permis de contribuer à ce projet innovant, me donnant ainsi l'opportunité d'appliquer mes connaissances en développement et d'acquérir une expérience professionnelle inestimable dans un environnement d'entreprise stimulant.</p>
+    </div>
+  </div>
+  
+  <footer>
+    <div class="container">
+      <p>&copy; 2025 Chido - CRP Contract Fixer - Solution Interne - Tous droits réservés</p>
+    </div>
+  </footer>
+</body>
+</html>

@@ -4,241 +4,180 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>À Propos - CRP Contract Fixer | Chido</title>
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.0/css/bootstrap.min.css" rel="stylesheet">
   <style>
-    :root {
-      --primary-color: #C6183D;
-      --primary-dark: #A11432;
-      --primary-light: #E13F60;
-      --text-color: #333;
-      --light-text: #777;
-      --bg-light: #f8f9fa;
+    .bg-primary-custom {
+      background-color: #C6183D !important;
     }
     
-    body {
-      font-family: 'Roboto', sans-serif;
-      line-height: 1.6;
-      color: var(--text-color);
-      margin: 0;
-      padding: 0;
+    .text-primary-custom {
+      color: #C6183D !important;
     }
     
-    .container {
-      max-width: 1140px;
-      margin: 0 auto;
-      padding: 2rem 15px;
-    }
-    
-    .about-header {
-      background-color: var(--primary-color);
+    .btn-primary-custom {
+      background-color: #C6183D;
+      border-color: #C6183D;
       color: white;
-      padding: 3rem 0;
-      text-align: center;
-      margin-bottom: 2rem;
     }
     
-    .company-logo {
-      max-height: 60px;
-      margin-bottom: 1rem;
+    .btn-primary-custom:hover, .btn-primary-custom:focus {
+      background-color: #a51332;
+      border-color: #a51332;
+      color: white;
     }
     
-    .about-content {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 2rem;
+    .border-primary-custom {
+      border-color: #C6183D !important;
     }
     
-    .about-text {
-      flex: 2;
-      min-width: 300px;
-    }
-    
-    .about-sidebar {
-      flex: 1;
-      min-width: 250px;
-      background-color: var(--bg-light);
-      padding: 1.5rem;
-      border-radius: 4px;
-    }
-    
-    .team-section {
-      margin-top: 3rem;
-    }
-    
-    .team-members {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 1.5rem;
-      justify-content: center;
-    }
-    
-    .team-member {
-      text-align: center;
-      flex: 1;
-      min-width: 200px;
-      max-width: 300px;
-    }
-    
-    .team-member img {
+    .team-member-img {
       width: 120px;
       height: 120px;
-      border-radius: 50%;
-      object-fit: cover;
-      border: 3px solid var(--primary-color);
+      border: 3px solid #C6183D;
     }
     
-    .btn-primary {
-      background-color: var(--primary-color);
+    .internal-badge {
+      background-color: #C6183D;
       color: white;
-      padding: 0.5rem 1rem;
-      border: none;
+      padding: 0.25rem 0.75rem;
       border-radius: 4px;
-      cursor: pointer;
-      text-decoration: none;
-      display: inline-block;
-      transition: background-color 0.3s;
-    }
-    
-    .btn-primary:hover {
-      background-color: var(--primary-dark);
-    }
-    
-    h1, h2, h3 {
-      color: var(--primary-color);
-    }
-    
-    .tech-stack {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 0.5rem;
-      margin-top: 1rem;
+      font-size: 0.9rem;
+      vertical-align: middle;
     }
     
     .tech-badge {
-      background-color: var(--primary-light);
+      background-color: rgba(198, 24, 61, 0.7);
       color: white;
       padding: 0.25rem 0.75rem;
       border-radius: 20px;
       font-size: 0.9rem;
-    }
-    
-    footer {
-      background-color: var(--bg-light);
-      padding: 1.5rem 0;
-      text-align: center;
-      margin-top: 3rem;
-    }
-    
-    .internal-badge {
       display: inline-block;
-      background-color: var(--primary-color);
-      color: white;
-      padding: 0.25rem 0.75rem;
-      border-radius: 4px;
-      margin-left: 1rem;
-      font-size: 0.9rem;
-      vertical-align: middle;
+      margin-right: 0.5rem;
+      margin-bottom: 0.5rem;
     }
   </style>
 </head>
 <body>
-  <div class="about-header">
-    <div class="container">
-      <img src="/api/placeholder/200/60" alt="Chido Logo" class="company-logo">
-      <h1>CRP Contract Fixer <span class="internal-badge">Solution Interne</span></h1>
-      <p>Solution automatisée pour le traitement et la correction des contrats bancaires chez Chido</p>
+  <header class="bg-primary-custom text-white py-5 mb-4">
+    <div class="container text-center">
+      <img src="/api/placeholder/200/60" alt="Chido Logo" class="mb-3" height="60">
+      <h1 class="display-5">CRP Contract Fixer <span class="badge bg-light text-primary-custom ms-2">Solution Interne</span></h1>
+      <p class="lead">Solution automatisée pour le traitement et la correction des contrats bancaires chez Chido</p>
     </div>
-  </div>
+  </header>
   
-  <div class="container">
-    <div class="about-content">
-      <div class="about-text">
-        <h2>Notre Solution</h2>
+  <div class="container py-4">
+    <div class="row g-4">
+      <div class="col-lg-8">
+        <h2 class="text-primary-custom">Notre Solution</h2>
         <p>CRP Contract Fixer est une application desktop développée en interne pour répondre aux besoins spécifiques de Chido dans le traitement des fichiers de contrats clients. Notre objectif est d'optimiser et d'automatiser le processus de correction des erreurs dans les contrats bancaires, permettant ainsi de gagner un temps précieux et de minimiser les risques d'erreurs humaines.</p>
         
-        <h2>Le Projet</h2>
+        <h2 class="text-primary-custom mt-4">Le Projet</h2>
         <p>Chez Chido, nous générons mensuellement des fichiers XML contenant jusqu'à 250 000 contrats clients. Un second fichier XML répertorie les erreurs présentes dans ces contrats en indiquant les numéros de colonnes affectées. Notre application interne permet d'automatiser entièrement le traitement de ces fichiers, offrant ainsi une solution efficace et fiable pour la gestion des contrats.</p>
         
         <p>Grâce à CRP Contract Fixer, les équipes de Chido peuvent :</p>
-        <ul>
-          <li>Importer et analyser rapidement les fichiers XML de contrats</li>
-          <li>Identifier automatiquement les erreurs signalées</li>
-          <li>Visualiser les contrats problématiques de manière claire</li>
-          <li>Appliquer des corrections en masse ou individuellement</li>
-          <li>Exporter les contrats corrigés dans le format requis</li>
-          <li>Générer des rapports détaillés sur les corrections effectuées</li>
+        <ul class="list-group list-group-flush mb-4">
+          <li class="list-group-item">Importer et analyser rapidement les fichiers XML de contrats</li>
+          <li class="list-group-item">Identifier automatiquement les erreurs signalées</li>
+          <li class="list-group-item">Visualiser les contrats problématiques de manière claire</li>
+          <li class="list-group-item">Appliquer des corrections en masse ou individuellement</li>
+          <li class="list-group-item">Exporter les contrats corrigés dans le format requis</li>
+          <li class="list-group-item">Générer des rapports détaillés sur les corrections effectuées</li>
         </ul>
         
-        <div class="tech-stack">
-          <div class="tech-badge">Angular</div>
-          <div class="tech-badge">Bootstrap</div>
-          <div class="tech-badge">XML</div>
-          <div class="tech-badge">Desktop App</div>
+        <div class="mb-4">
+          <span class="tech-badge">Angular</span>
+          <span class="tech-badge">Bootstrap</span>
+          <span class="tech-badge">XML</span>
+          <span class="tech-badge">Desktop App</span>
         </div>
       </div>
       
-      <div class="about-sidebar">
-        <h3>Amélioration des Processus</h3>
-        <p>Pour Chido, cette solution interne permet de :</p>
-        <ul>
-          <li>Réduire le temps de traitement des contrats de 90%</li>
-          <li>Éliminer les erreurs humaines lors des corrections</li>
-          <li>Améliorer la traçabilité des modifications</li>
-          <li>Optimiser l'allocation des ressources humaines</li>
-          <li>Renforcer la sécurité des données sensibles</li>
-          <li>Standardiser le processus au sein de l'entreprise</li>
-        </ul>
-        
-        <a href="#contact" class="btn-primary">Contacter l'équipe</a>
-      </div>
-    </div>
-    
-    <div class="team-section">
-      <h2>L'Équipe du Projet</h2>
-      <p>Le développement de CRP Contract Fixer est le fruit d'une collaboration entre différents départements de Chido.</p>
-      
-      <div class="team-members">
-        <div class="team-member">
-          <img src="/api/placeholder/120/120" alt="Placeholder">
-          <h3>Abd Ali</h3>
-          <p>Développeur Stagiaire</p>
-          <p>Responsable du développement frontend avec Angular et Bootstrap</p>
-        </div>
-        
-        <div class="team-member">
-          <img src="/api/placeholder/120/120" alt="Placeholder">
-          <h3>Mme. A</h3>
-          <p>Responsable de Projet</p>
-          <p>Supervision et coordination du développement</p>
-        </div>
-        
-        <div class="team-member">
-          <img src="/api/placeholder/120/120" alt="Placeholder">
-          <h3>M. L</h3>
-          <p>Expert Technique</p>
-          <p>Conseiller technique et architecture système</p>
-        </div>
-        
-        <div class="team-member">
-          <img src="/api/placeholder/120/120" alt="Placeholder">
-          <h3>M. M</h3>
-          <p>Analyste Fonctionnel</p>
-          <p>Spécifications et tests fonctionnels</p>
+      <div class="col-lg-4">
+        <div class="card bg-light">
+          <div class="card-body">
+            <h3 class="card-title text-primary-custom">Amélioration des Processus</h3>
+            <p>Pour Chido, cette solution interne permet de :</p>
+            <ul class="list-group list-group-flush mb-4">
+              <li class="list-group-item bg-light">Réduire le temps de traitement des contrats de 90%</li>
+              <li class="list-group-item bg-light">Éliminer les erreurs humaines lors des corrections</li>
+              <li class="list-group-item bg-light">Améliorer la traçabilité des modifications</li>
+              <li class="list-group-item bg-light">Optimiser l'allocation des ressources humaines</li>
+              <li class="list-group-item bg-light">Renforcer la sécurité des données sensibles</li>
+              <li class="list-group-item bg-light">Standardiser le processus au sein de l'entreprise</li>
+            </ul>
+            
+            <a href="#contact" class="btn btn-primary-custom">Contacter l'équipe</a>
+          </div>
         </div>
       </div>
     </div>
     
-    <div id="contact" class="team-section">
-      <h2>Remerciements</h2>
+    <div class="mt-5">
+      <h2 class="text-primary-custom text-center mb-4">L'Équipe du Projet</h2>
+      <p class="text-center">Le développement de CRP Contract Fixer est le fruit d'une collaboration entre différents départements de Chido.</p>
+      
+      <div class="row row-cols-1 row-cols-md-2 row-cols-lg-4 g-4 mt-3">
+        <div class="col">
+          <div class="card h-100 text-center">
+            <img src="/api/placeholder/120/120" alt="Placeholder" class="card-img-top rounded-circle mx-auto mt-3 team-member-img">
+            <div class="card-body">
+              <h5 class="card-title text-primary-custom">Abd Ali</h5>
+              <p class="card-text fw-bold">Développeur Stagiaire</p>
+              <p class="card-text">Responsable du développement frontend avec Angular et Bootstrap</p>
+            </div>
+          </div>
+        </div>
+        
+        <div class="col">
+          <div class="card h-100 text-center">
+            <img src="/api/placeholder/120/120" alt="Placeholder" class="card-img-top rounded-circle mx-auto mt-3 team-member-img">
+            <div class="card-body">
+              <h5 class="card-title text-primary-custom">Mme. A</h5>
+              <p class="card-text fw-bold">Responsable de Projet</p>
+              <p class="card-text">Supervision et coordination du développement</p>
+            </div>
+          </div>
+        </div>
+        
+        <div class="col">
+          <div class="card h-100 text-center">
+            <img src="/api/placeholder/120/120" alt="Placeholder" class="card-img-top rounded-circle mx-auto mt-3 team-member-img">
+            <div class="card-body">
+              <h5 class="card-title text-primary-custom">M. L</h5>
+              <p class="card-text fw-bold">Expert Technique</p>
+              <p class="card-text">Conseiller technique et architecture système</p>
+            </div>
+          </div>
+        </div>
+        
+        <div class="col">
+          <div class="card h-100 text-center">
+            <img src="/api/placeholder/120/120" alt="Placeholder" class="card-img-top rounded-circle mx-auto mt-3 team-member-img">
+            <div class="card-body">
+              <h5 class="card-title text-primary-custom">M. M</h5>
+              <p class="card-text fw-bold">Analyste Fonctionnel</p>
+              <p class="card-text">Spécifications et tests fonctionnels</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    
+    <div id="contact" class="my-5 p-4 border border-light rounded bg-light">
+      <h2 class="text-primary-custom mb-4">Remerciements</h2>
       <p>Je tiens à exprimer ma profonde gratitude envers Madame A, Monsieur L et Monsieur M pour leur encadrement, leurs conseils précieux et leur confiance tout au long de mon stage chez Chido. Leur expertise et leur disponibilité ont été déterminantes dans le développement réussi de cette solution interne.</p>
       
       <p>Un remerciement particulier à toute l'équipe de Chido qui m'a accueilli comme stagiaire et m'a permis de contribuer à ce projet innovant, me donnant ainsi l'opportunité d'appliquer mes connaissances en développement et d'acquérir une expérience professionnelle inestimable dans un environnement d'entreprise stimulant.</p>
     </div>
   </div>
   
-  <footer>
-    <div class="container">
+  <footer class="bg-light py-4 mt-5">
+    <div class="container text-center">
       <p>&copy; 2025 Chido - CRP Contract Fixer - Solution Interne - Tous droits réservés</p>
     </div>
   </footer>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.0/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>

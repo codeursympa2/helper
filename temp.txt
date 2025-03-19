@@ -1,55 +1,345 @@
-// Nouvelle méthode pour générer une version spécifique à la demande
-public Mono<String> generateVersionedContractFile(UUID folderId, int version) {
-    log.info("Generating version {} of contract file for folder: {}", version, folderId);
+public Mono<Void> processFiles(UUID folderId, FilePart contractsFile, FilePart errorsFile, 
+                           String contractParentTag, String contractChildTag, 
+                           String errorParentTag, String errorChildTag) {
+    Sinks.Many<ProgressEvent> sink = progressSinks.get(folderId);
+    AtomicInteger progress = new AtomicInteger(0);
+    
+    // Démarrer le heartbeat
+    startHeartbeat(folderId);
+
+    return folderService.findById(folderId)
+        .switchIfEmpty(Mono.error(new RuntimeException("Dossier non trouvé : " + folderId)))
+        .timeout(Duration.ofSeconds(300))
+        .flatMap(folder -> {
+            // Mettre à jour l'état du dossier
+            FolderEntity updatedFolder = new FolderEntity(
+                folder.id(), folder.name(), folder.bceaoStatus(), folder.period(), 
+                0, FolderStatus.PROCESSING.name(), folder.createdAt(), LocalDateTime.now()
+            );
+            return folderService.save(updatedFolder);
+        })
+        .doOnNext(folder -> {
+            sink.tryEmitNext(new ProgressEvent(folderId, progress.get(), 
+                "Démarrage du traitement des fichiers", "PROCESSING"));
+        })
+        .then(saveFile(folderId, contractsFile, "original", 0))
+        .doOnSuccess(file -> {
+            progress.addAndGet(10);
+            sink.tryEmitNext(new ProgressEvent(folderId, progress.get(), 
+                "Fichier de contrats XML enregistré", "PROCESSING"));
+        })
+        .then(saveFile(folderId, errorsFile, "errors", 0))
+        .doOnSuccess(file -> {
+            progress.addAndGet(10);
+            sink.tryEmitNext(new ProgressEvent(folderId, progress.get(), 
+                "Fichier d'erreurs XML enregistré", "PROCESSING"));
+        })
+        .then(processXmlFilesDirectly(folderId, progress, sink, 
+            contractParentTag, contractChildTag, errorParentTag, errorChildTag))
+        .onErrorResume(e -> {
+            log.error("Erreur lors du traitement des fichiers XML", e);
+            sink.tryEmitNext(new ProgressEvent(folderId, progress.get(), 
+                "Error: " + e.getMessage(), "ERROR"));
+            sink.tryEmitComplete();
+            stopHeartbeat(folderId);
+            return updateFolderStatus(folderId, FolderStatus.ERROR.name()).then();
+        })
+        .doFinally(signalType -> {
+            // S'assurer que le battement de cœur est arrêté
+            stopHeartbeat(folderId);
+        })
+        .then();
+}
+
+// Nouvelle méthode pour traiter les fichiers XML directement sans versions intermédiaires
+private Mono<Void> processXmlFilesDirectly(UUID folderId, AtomicInteger progress, 
+                                        Sinks.Many<ProgressEvent> sink,
+                                        String contractParentTag, String contractChildTag, 
+                                        String errorParentTag, String errorChildTag) {
+    log.info("Démarrage du traitement XML direct pour le dossier : {}", folderId);
     
     return fileService.findByFolderIdAndType(folderId, "original")
-            .take(1)
-            .switchIfEmpty(Mono.error(new IllegalStateException("Original file not found")))
-            .zipWith(fileService.findByFolderIdAndType(folderId, "errors").take(1)
-                    .switchIfEmpty(Mono.error(new IllegalStateException("Errors file not found"))))
-            .flatMap(tuple -> {
-                FileEntity contractsFileEntity = tuple.getT1();
-                FileEntity errorsFileEntity = tuple.getT2();
-                
-                return readContractsAndErrors(folderId, contractsFileEntity, errorsFileEntity)
-                        .flatMap(result -> {
-                            String originalContractsContent = result.getT1();
-                            String errorsContent = result.getT2();
+        .take(1)
+        .zipWith(fileService.findByFolderIdAndType(folderId, "errors").take(1))
+        .flatMap(tuple -> {
+            FileEntity contractsFileEntity = tuple.getT1();
+            FileEntity errorsFileEntity = tuple.getT2();
+            
+            log.info("Fichier original : {} et fichier d'erreurs : {} trouvés pour le dossier : {}", 
+                contractsFileEntity.name(), errorsFileEntity.name(), folderId);
+            
+            return readContractsAndErrors(folderId, contractsFileEntity, errorsFileEntity)
+                .flatMap(result -> {
+                    String originalContractsContent = result.getT1();
+                    String errorsContent = result.getT2();
+                    
+                    log.info("Contenu des contrats et des erreurs lu pour le dossier : {}", folderId);
+                    
+                    // Extraire les références d'erreur
+                    List<String> errorReferences = extractErrorReferences(errorsContent, errorParentTag, errorChildTag);
+                    errorRefs = errorReferences; // sauvegarde pour utilisation ultérieure
+                    
+                    log.info("Références d'erreur extraites : {}", errorReferences);
+                    
+                    // Vérifier les doublons
+                    Set<String> uniqueReferences = new HashSet<>(errorReferences);
+                    if (uniqueReferences.size() < errorReferences.size()) {
+                        log.warn("{} références en double trouvées dans le fichier d'erreur", 
+                            errorReferences.size() - uniqueReferences.size());
+                    }
+                    
+                    int totalErrors = errorReferences.size();
+                    setTotalErrors(totalErrors);
+                    
+                    // Sauvegarder toutes les références d'erreur dans un fichier
+                    saveErrorReferencesToFile(folderId, errorReferences);
+                    
+                    log.info("{} références d'erreur trouvées pour le dossier : {}", totalErrors, folderId);
+                    
+                    if (totalErrors == 0) {
+                        sink.tryEmitNext(new ProgressEvent(
+                            folderId, progress.get(),
+                            "Aucune référence d'erreur trouvée dans le fichier d'erreurs", 
+                            FolderStatus.PROCESSING.name()
+                        ));
+                        return finalizeFolderProcessing(folderId, sink, progress);
+                    }
+                    
+                    // Identifier les codes des contrats à supprimer
+                    return findContractCodesToRemove(originalContractsContent, errorReferences, 
+                        contractParentTag, contractChildTag)
+                        .flatMap(contractCodesToRemove -> {
+                            log.info("Trouvé {} codes de contrat à supprimer pour le dossier: {}", 
+                                contractCodesToRemove.size(), folderId);
                             
-                            // Extraire les références d'erreur
-                            List<String> errorReferences = extractErrorReferences(errorsContent, "LIGNE", "COLONNE");
+                            // Sauvegarder les infos des contrats à supprimer
+                            saveContractsToRemoveInfo(folderId, errorReferences, contractCodesToRemove);
                             
-                            if (errorReferences.isEmpty()) {
-                                return Mono.just(originalContractsContent);
-                            }
-                            
-                            if (version <= 0 || version > errorReferences.size()) {
-                                return Mono.error(new IllegalArgumentException(
-                                        "Version invalide. Doit être entre 1 et " + errorReferences.size()));
-                            }
-                            
-                            // Identifier les codes des contrats à supprimer
-                            return findContractCodesToRemove(originalContractsContent, errorReferences, "CONTRAT", "CODE")
-                                    .flatMap(contractCodesToRemove -> {
-                                        // Nous allons supprimer seulement les N premiers contrats selon la version demandée
-                                        List<String> contractsToRemove = contractCodesToRemove.subList(0, version);
-                                        
-                                        // Utiliser collectList() pour transformer le Flux en Mono<List>
-                                        return Mono.just(contractsToRemove)
-                                            .flatMap(contracts -> {
-                                                String resultContent = originalContractsContent;
-                                                
-                                                // Supprimer un par un les contrats dans l'ordre
-                                                for (int i = 0; i < contracts.size(); i++) {
-                                                    String contractCode = contracts.get(i);
-                                                    resultContent = removeContractFromContent(
-                                                            resultContent, contractCode, "CONTRAT", "CODE");
-                                                    log.info("Removed contract {} for version {}", contractCode, version);
-                                                }
-                                                
-                                                return Mono.just(resultContent);
-                                            });
-                                    });
+                            // Supprimer tous les contrats problématiques en une seule fois
+                            return removeAllContractsByCode(
+                                folderId, originalContractsContent, contractCodesToRemove,
+                                contractParentTag, contractChildTag
+                            )
+                            .doOnSuccess(cleanFile -> {
+                                progress.set(90);
+                                sink.tryEmitNext(new ProgressEvent(
+                                    folderId, progress.get(),
+                                    "Tous les contrats problématiques traités: " + contractCodesToRemove.size(),
+                                    FolderStatus.PROCESSING.name()
+                                ));
+                            })
+                            .then(finalizeFolderProcessing(folderId, sink, progress));
                         });
-            });
+                });
+        })
+        .onErrorResume(e -> {
+            log.error("Erreur lors du traitement des fichiers XML", e);
+            sink.tryEmitNext(new ProgressEvent(folderId, progress.get(), 
+                "Error: " + e.getMessage(), "ERROR"));
+            sink.tryEmitComplete();
+            return updateFolderStatus(folderId, FolderStatus.ERROR.name()).then();
+        })
+        .then();
+}
+
+// Méthode pour supprimer tous les contrats problématiques en une seule fois
+private Mono<FileEntity> removeAllContractsByCode(UUID folderId, String xmlContent, 
+                                             List<String> contractCodes,
+                                             String contractParentTag, String contractChildTag) {
+    return Mono.fromCallable(() -> {
+        try {
+            StringBuilder updatedContent = new StringBuilder(xmlContent);
+            boolean anyContractRemoved = false;
+            
+            // Balises à rechercher
+            String openTag = "<" + contractParentTag;
+            String closeTag = "</" + contractParentTag + ">";
+            String codeOpenTag = "<" + contractChildTag + ">";
+            String codeCloseTag = "</" + contractChildTag + ">";
+            
+            // Pour chaque code de contrat à supprimer
+            for (String contractCode : contractCodes) {
+                int searchPos = 0;
+                boolean contractFound = false;
+                
+                // Rechercher le contrat par son code
+                while (searchPos < updatedContent.length()) {
+                    int startTagPos = updatedContent.indexOf(openTag, searchPos);
+                    if (startTagPos == -1) break;
+                    
+                    int endTagPos = updatedContent.indexOf(closeTag, startTagPos);
+                    if (endTagPos == -1) break;
+                    endTagPos += closeTag.length();
+                    
+                    String contractContent = updatedContent.substring(startTagPos, endTagPos);
+                    
+                    // Extraire le code du contrat
+                    String currentCode = null;
+                    int codeStart = contractContent.indexOf(codeOpenTag);
+                    if (codeStart != -1) {
+                        int codeValueStart = codeStart + codeOpenTag.length();
+                        int codeValueEnd = contractContent.indexOf(codeCloseTag, codeValueStart);
+                        if (codeValueEnd != -1) {
+                            currentCode = contractContent.substring(codeValueStart, codeValueEnd);
+                        }
+                    }
+                    
+                    if (contractCode.equals(currentCode)) {
+                        // Supprimer ce contrat
+                        updatedContent.delete(startTagPos, endTagPos);
+                        contractFound = true;
+                        anyContractRemoved = true;
+                        break;
+                    }
+                    
+                    searchPos = endTagPos;
+                }
+                
+                if (!contractFound) {
+                    log.warn("Contrat avec le code {} introuvable dans le contenu XML", contractCode);
+                }
+            }
+            
+            if (!anyContractRemoved) {
+                log.warn("Aucun contrat n'a été supprimé");
+            }
+            
+            // Sauvegarder le fichier clean_contracts.xml
+            Path cleanPath = Paths.get(BASE_DIR + folderId + "/clean_contracts.xml");
+            Files.createDirectories(cleanPath.getParent());
+            Files.writeString(cleanPath, updatedContent.toString());
+            
+            log.info("Fichier clean_contracts.xml créé avec succès");
+            
+            // Créer l'entité fichier pour le fichier clean
+            FileEntity cleanFile = new FileEntity(
+                "clean_contracts.xml",
+                "clean",
+                0,
+                folderId
+            );
+            
+            return cleanFile;
+        } catch (Exception e) {
+            log.error("Erreur lors de la suppression des contrats", e);
+            throw new RuntimeException("Erreur lors de la suppression des contrats : " + e.getMessage(), e);
+        }
+    }).flatMap(fileService::save);
+}
+
+// Méthode pour sauvegarder les informations des contrats à supprimer
+private void saveContractsToRemoveInfo(UUID folderId, List<String> errorReferences, List<String> contractCodes) {
+    try {
+        Path filePath = Paths.get(BASE_DIR + folderId + "/removed_contracts.txt");
+        Files.createDirectories(filePath.getParent());
+        
+        List<String> lines = new ArrayList<>();
+        lines.add("=== CONTRATS SUPPRIMÉS ===");
+        lines.add("Nombre total de contrats supprimés : " + contractCodes.size());
+        lines.add("");
+        
+        for (int i = 0; i < contractCodes.size(); i++) {
+            lines.add(String.format("Contrat %d : Code %s (Référence d'erreur : %s)", 
+                i + 1, contractCodes.get(i), errorReferences.get(i)));
+        }
+        
+        Files.write(filePath, lines);
+        log.info("Informations des contrats supprimés enregistrées dans le fichier pour le dossier {}", folderId);
+    } catch (IOException e) {
+        log.error("Échec de l'enregistrement des informations des contrats supprimés", e);
+    }
+}
+
+// Nouvelle méthode pour générer une version spécifique à la demande
+public Mono<String> generateVersionedFile(UUID folderId, int version) {
+    log.info("Génération du fichier version {} pour le dossier {}", version, folderId);
+    
+    return fileService.findByFolderIdAndType(folderId, "original")
+        .take(1)
+        .zipWith(fileService.findByFolderIdAndType(folderId, "errors").take(1))
+        .flatMap(tuple -> {
+            FileEntity contractsFileEntity = tuple.getT1();
+            FileEntity errorsFileEntity = tuple.getT2();
+            
+            return readContractsAndErrors(folderId, contractsFileEntity, errorsFileEntity)
+                .flatMap(result -> {
+                    String originalContractsContent = result.getT1();
+                    String errorsContent = result.getT2();
+                    
+                    // Extraire les références d'erreur
+                    List<String> errorReferences = extractErrorReferences(errorsContent, 
+                        "errorParentTag", "errorChildTag"); // Paramètres à adapter
+                    
+                    // Identifier les codes des contrats à supprimer
+                    return findContractCodesToRemove(originalContractsContent, errorReferences, 
+                        "contractParentTag", "contractChildTag") // Paramètres à adapter
+                        .flatMap(contractCodesToRemove -> {
+                            // Vérifier que la version demandée est valide
+                            if (version <= 0 || version > contractCodesToRemove.size()) {
+                                return Mono.error(new IllegalArgumentException(
+                                    "Version invalide. Doit être entre 1 et " + contractCodesToRemove.size()));
+                            }
+                            
+                            // Récupérer seulement les n premiers contrats à supprimer selon la version
+                            List<String> contractsToRemoveForVersion = 
+                                contractCodesToRemove.subList(0, version);
+                            
+                            // Générer le contenu du fichier versionné
+                            return generateVersionedContent(originalContractsContent, 
+                                contractsToRemoveForVersion, "contractParentTag", "contractChildTag");
+                        });
+                });
+        });
+}
+
+// Méthode pour générer le contenu d'une version spécifique
+private Mono<String> generateVersionedContent(String originalContent, List<String> contractCodesToRemove,
+                                          String contractParentTag, String contractChildTag) {
+    return Mono.fromCallable(() -> {
+        StringBuilder updatedContent = new StringBuilder(originalContent);
+        
+        // Balises à rechercher
+        String openTag = "<" + contractParentTag;
+        String closeTag = "</" + contractParentTag + ">";
+        String codeOpenTag = "<" + contractChildTag + ">";
+        String codeCloseTag = "</" + contractChildTag + ">";
+        
+        // Pour chaque code de contrat à supprimer
+        for (String contractCode : contractCodesToRemove) {
+            int searchPos = 0;
+            
+            // Rechercher le contrat par son code
+            while (searchPos < updatedContent.length()) {
+                int startTagPos = updatedContent.indexOf(openTag, searchPos);
+                if (startTagPos == -1) break;
+                
+                int endTagPos = updatedContent.indexOf(closeTag, startTagPos);
+                if (endTagPos == -1) break;
+                endTagPos += closeTag.length();
+                
+                String contractContent = updatedContent.substring(startTagPos, endTagPos);
+                
+                // Extraire le code du contrat
+                String currentCode = null;
+                int codeStart = contractContent.indexOf(codeOpenTag);
+                if (codeStart != -1) {
+                    int codeValueStart = codeStart + codeOpenTag.length();
+                    int codeValueEnd = contractContent.indexOf(codeCloseTag, codeValueStart);
+                    if (codeValueEnd != -1) {
+                        currentCode = contractContent.substring(codeValueStart, codeValueEnd);
+                    }
+                }
+                
+                if (contractCode.equals(currentCode)) {
+                    // Supprimer ce contrat
+                    updatedContent.delete(startTagPos, endTagPos);
+                    break;
+                }
+                
+                searchPos = endTagPos;
+            }
+        }
+        
+        return updatedContent.toString();
+    }).subscribeOn(Schedulers.boundedElastic());
 }

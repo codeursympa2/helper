@@ -1,183 +1,54 @@
-<!DOCTYPE html>
-<html lang="fr">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>À Propos - CRP Contract Fixer | Chido</title>
-  <link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.0/css/bootstrap.min.css" rel="stylesheet">
-  <style>
-    .bg-primary-custom {
-      background-color: #C6183D !important;
-    }
+// Nouvelle méthode pour générer une version spécifique à la demande
+public Mono<String> generateVersionedContractFile(UUID folderId, int version) {
+    log.info("Generating version {} of contract file for folder: {}", version, folderId);
     
-    .text-primary-custom {
-      color: #C6183D !important;
-    }
-    
-    .btn-primary-custom {
-      background-color: #C6183D;
-      border-color: #C6183D;
-      color: white;
-    }
-    
-    .btn-primary-custom:hover, .btn-primary-custom:focus {
-      background-color: #a51332;
-      border-color: #a51332;
-      color: white;
-    }
-    
-    .border-primary-custom {
-      border-color: #C6183D !important;
-    }
-    
-    .team-member-img {
-      width: 120px;
-      height: 120px;
-      border: 3px solid #C6183D;
-    }
-    
-    .internal-badge {
-      background-color: #C6183D;
-      color: white;
-      padding: 0.25rem 0.75rem;
-      border-radius: 4px;
-      font-size: 0.9rem;
-      vertical-align: middle;
-    }
-    
-    .tech-badge {
-      background-color: rgba(198, 24, 61, 0.7);
-      color: white;
-      padding: 0.25rem 0.75rem;
-      border-radius: 20px;
-      font-size: 0.9rem;
-      display: inline-block;
-      margin-right: 0.5rem;
-      margin-bottom: 0.5rem;
-    }
-  </style>
-</head>
-<body>
-  <header class="bg-primary-custom text-white py-5 mb-4">
-    <div class="container text-center">
-      <img src="/api/placeholder/200/60" alt="Chido Logo" class="mb-3" height="60">
-      <h1 class="display-5">CRP Contract Fixer <span class="badge bg-light text-primary-custom ms-2">Solution Interne</span></h1>
-      <p class="lead">Solution automatisée pour le traitement et la correction des contrats bancaires chez Chido</p>
-    </div>
-  </header>
-  
-  <div class="container py-4">
-    <div class="row g-4">
-      <div class="col-lg-8">
-        <h2 class="text-primary-custom">Notre Solution</h2>
-        <p>CRP Contract Fixer est une application desktop développée en interne pour répondre aux besoins spécifiques de Chido dans le traitement des fichiers de contrats clients. Notre objectif est d'optimiser et d'automatiser le processus de correction des erreurs dans les contrats bancaires, permettant ainsi de gagner un temps précieux et de minimiser les risques d'erreurs humaines.</p>
-        
-        <h2 class="text-primary-custom mt-4">Le Projet</h2>
-        <p>Chez Chido, nous générons mensuellement des fichiers XML contenant jusqu'à 250 000 contrats clients. Un second fichier XML répertorie les erreurs présentes dans ces contrats en indiquant les numéros de colonnes affectées. Notre application interne permet d'automatiser entièrement le traitement de ces fichiers, offrant ainsi une solution efficace et fiable pour la gestion des contrats.</p>
-        
-        <p>Grâce à CRP Contract Fixer, les équipes de Chido peuvent :</p>
-        <ul class="list-group list-group-flush mb-4">
-          <li class="list-group-item">Importer et analyser rapidement les fichiers XML de contrats</li>
-          <li class="list-group-item">Identifier automatiquement les erreurs signalées</li>
-          <li class="list-group-item">Visualiser les contrats problématiques de manière claire</li>
-          <li class="list-group-item">Appliquer des corrections en masse ou individuellement</li>
-          <li class="list-group-item">Exporter les contrats corrigés dans le format requis</li>
-          <li class="list-group-item">Générer des rapports détaillés sur les corrections effectuées</li>
-        </ul>
-        
-        <div class="mb-4">
-          <span class="tech-badge">Angular</span>
-          <span class="tech-badge">Bootstrap</span>
-          <span class="tech-badge">XML</span>
-          <span class="tech-badge">Desktop App</span>
-        </div>
-      </div>
-      
-      <div class="col-lg-4">
-        <div class="card bg-light">
-          <div class="card-body">
-            <h3 class="card-title text-primary-custom">Amélioration des Processus</h3>
-            <p>Pour Chido, cette solution interne permet de :</p>
-            <ul class="list-group list-group-flush mb-4">
-              <li class="list-group-item bg-light">Réduire le temps de traitement des contrats de 90%</li>
-              <li class="list-group-item bg-light">Éliminer les erreurs humaines lors des corrections</li>
-              <li class="list-group-item bg-light">Améliorer la traçabilité des modifications</li>
-              <li class="list-group-item bg-light">Optimiser l'allocation des ressources humaines</li>
-              <li class="list-group-item bg-light">Renforcer la sécurité des données sensibles</li>
-              <li class="list-group-item bg-light">Standardiser le processus au sein de l'entreprise</li>
-            </ul>
-            
-            <a href="#contact" class="btn btn-primary-custom">Contacter l'équipe</a>
-          </div>
-        </div>
-      </div>
-    </div>
-    
-    <div class="mt-5">
-      <h2 class="text-primary-custom text-center mb-4">L'Équipe du Projet</h2>
-      <p class="text-center">Le développement de CRP Contract Fixer est le fruit d'une collaboration entre différents départements de Chido.</p>
-      
-      <div class="row row-cols-1 row-cols-md-2 row-cols-lg-4 g-4 mt-3">
-        <div class="col">
-          <div class="card h-100 text-center">
-            <img src="/api/placeholder/120/120" alt="Placeholder" class="card-img-top rounded-circle mx-auto mt-3 team-member-img">
-            <div class="card-body">
-              <h5 class="card-title text-primary-custom">Abd Ali</h5>
-              <p class="card-text fw-bold">Développeur Stagiaire</p>
-              <p class="card-text">Responsable du développement frontend avec Angular et Bootstrap</p>
-            </div>
-          </div>
-        </div>
-        
-        <div class="col">
-          <div class="card h-100 text-center">
-            <img src="/api/placeholder/120/120" alt="Placeholder" class="card-img-top rounded-circle mx-auto mt-3 team-member-img">
-            <div class="card-body">
-              <h5 class="card-title text-primary-custom">Mme. A</h5>
-              <p class="card-text fw-bold">Responsable de Projet</p>
-              <p class="card-text">Supervision et coordination du développement</p>
-            </div>
-          </div>
-        </div>
-        
-        <div class="col">
-          <div class="card h-100 text-center">
-            <img src="/api/placeholder/120/120" alt="Placeholder" class="card-img-top rounded-circle mx-auto mt-3 team-member-img">
-            <div class="card-body">
-              <h5 class="card-title text-primary-custom">M. L</h5>
-              <p class="card-text fw-bold">Expert Technique</p>
-              <p class="card-text">Conseiller technique et architecture système</p>
-            </div>
-          </div>
-        </div>
-        
-        <div class="col">
-          <div class="card h-100 text-center">
-            <img src="/api/placeholder/120/120" alt="Placeholder" class="card-img-top rounded-circle mx-auto mt-3 team-member-img">
-            <div class="card-body">
-              <h5 class="card-title text-primary-custom">M. M</h5>
-              <p class="card-text fw-bold">Analyste Fonctionnel</p>
-              <p class="card-text">Spécifications et tests fonctionnels</p>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-    
-    <div id="contact" class="my-5 p-4 border border-light rounded bg-light">
-      <h2 class="text-primary-custom mb-4">Remerciements</h2>
-      <p>Je tiens à exprimer ma profonde gratitude envers Madame A, Monsieur L et Monsieur M pour leur encadrement, leurs conseils précieux et leur confiance tout au long de mon stage chez Chido. Leur expertise et leur disponibilité ont été déterminantes dans le développement réussi de cette solution interne.</p>
-      
-      <p>Un remerciement particulier à toute l'équipe de Chido qui m'a accueilli comme stagiaire et m'a permis de contribuer à ce projet innovant, me donnant ainsi l'opportunité d'appliquer mes connaissances en développement et d'acquérir une expérience professionnelle inestimable dans un environnement d'entreprise stimulant.</p>
-    </div>
-  </div>
-  
-  <footer class="bg-light py-4 mt-5">
-    <div class="container text-center">
-      <p>&copy; 2025 Chido - CRP Contract Fixer - Solution Interne - Tous droits réservés</p>
-    </div>
-  </footer>
-
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.0/js/bootstrap.bundle.min.js"></script>
-</body>
-</html>
+    return fileService.findByFolderIdAndType(folderId, "original")
+            .take(1)
+            .switchIfEmpty(Mono.error(new IllegalStateException("Original file not found")))
+            .zipWith(fileService.findByFolderIdAndType(folderId, "errors").take(1)
+                    .switchIfEmpty(Mono.error(new IllegalStateException("Errors file not found"))))
+            .flatMap(tuple -> {
+                FileEntity contractsFileEntity = tuple.getT1();
+                FileEntity errorsFileEntity = tuple.getT2();
+                
+                return readContractsAndErrors(folderId, contractsFileEntity, errorsFileEntity)
+                        .flatMap(result -> {
+                            String originalContractsContent = result.getT1();
+                            String errorsContent = result.getT2();
+                            
+                            // Extraire les références d'erreur
+                            List<String> errorReferences = extractErrorReferences(errorsContent, "LIGNE", "COLONNE");
+                            
+                            if (errorReferences.isEmpty()) {
+                                return Mono.just(originalContractsContent);
+                            }
+                            
+                            if (version <= 0 || version > errorReferences.size()) {
+                                return Mono.error(new IllegalArgumentException(
+                                        "Version invalide. Doit être entre 1 et " + errorReferences.size()));
+                            }
+                            
+                            // Identifier les codes des contrats à supprimer
+                            return findContractCodesToRemove(originalContractsContent, errorReferences, "CONTRAT", "CODE")
+                                    .flatMap(contractCodesToRemove -> {
+                                        // Nous allons supprimer seulement les N premiers contrats selon la version demandée
+                                        List<String> contractsToRemove = contractCodesToRemove.subList(0, version);
+                                        
+                                        // Convertir explicitement en Mono<String> pour éviter le problème de type
+                                        return Mono.<String>fromCallable(() -> {
+                                            String resultContent = originalContractsContent;
+                                            
+                                            // Supprimer un par un les contrats dans l'ordre
+                                            for (int i = 0; i < contractsToRemove.size(); i++) {
+                                                String contractCode = contractsToRemove.get(i);
+                                                resultContent = removeContractFromContent(
+                                                        resultContent, contractCode, "CONTRAT", "CODE");
+                                                log.info("Removed contract {} for version {}", contractCode, version);
+                                            }
+                                            
+                                            return resultContent;
+                                        }).subscribeOn(Schedulers.boundedElastic());
+                                    });
+                        });
+            });
+}

@@ -34,20 +34,21 @@ public Mono<String> generateVersionedContractFile(UUID folderId, int version) {
                                         // Nous allons supprimer seulement les N premiers contrats selon la version demandée
                                         List<String> contractsToRemove = contractCodesToRemove.subList(0, version);
                                         
-                                        // Convertir explicitement en Mono<String> pour éviter le problème de type
-                                        return Mono.<String>fromCallable(() -> {
-                                            String resultContent = originalContractsContent;
-                                            
-                                            // Supprimer un par un les contrats dans l'ordre
-                                            for (int i = 0; i < contractsToRemove.size(); i++) {
-                                                String contractCode = contractsToRemove.get(i);
-                                                resultContent = removeContractFromContent(
-                                                        resultContent, contractCode, "CONTRAT", "CODE");
-                                                log.info("Removed contract {} for version {}", contractCode, version);
-                                            }
-                                            
-                                            return resultContent;
-                                        }).subscribeOn(Schedulers.boundedElastic());
+                                        // Utiliser collectList() pour transformer le Flux en Mono<List>
+                                        return Mono.just(contractsToRemove)
+                                            .flatMap(contracts -> {
+                                                String resultContent = originalContractsContent;
+                                                
+                                                // Supprimer un par un les contrats dans l'ordre
+                                                for (int i = 0; i < contracts.size(); i++) {
+                                                    String contractCode = contracts.get(i);
+                                                    resultContent = removeContractFromContent(
+                                                            resultContent, contractCode, "CONTRAT", "CODE");
+                                                    log.info("Removed contract {} for version {}", contractCode, version);
+                                                }
+                                                
+                                                return Mono.just(resultContent);
+                                            });
                                     });
                         });
             });
